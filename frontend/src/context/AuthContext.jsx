@@ -31,11 +31,18 @@ export const AuthProvider = ({ children }) => {
 
   const fetchUser = async () => {
     try {
+      console.log('[AuthContext] Fetching user');
       const response = await api.get('/auth/me');
       setUser(response.data.user);
       localStorage.setItem('user', JSON.stringify(response.data.user));
+      console.log('[AuthContext] User fetched successfully');
     } catch (error) {
-      console.error('Error fetching user:', error);
+      console.error('[AuthContext] Error fetching user:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        code: error.code,
+      });
       logout();
     } finally {
       setLoading(false);
@@ -44,9 +51,11 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     try {
+      console.log('[AuthContext] Login attempt');
       const response = await api.post('/auth/login', { email, password });
       const { token, user } = response.data;
 
+      console.log('[AuthContext] Login successful, saving token');
       localStorage.setItem('token', token);
       localStorage.setItem('user', JSON.stringify(user));
       setUser(user);
@@ -54,15 +63,22 @@ export const AuthProvider = ({ children }) => {
 
       return { success: true };
     } catch (error) {
+      console.error('[AuthContext] Login error:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        code: error.code,
+      });
       return {
         success: false,
-        message: error.response?.data?.message || 'Login failed',
+        message: error.response?.data?.message || error.message || 'Login failed',
       };
     }
   };
 
   const register = async (username, email, password) => {
     try {
+      console.log('[AuthContext] Register attempt');
       const response = await api.post('/auth/register', {
         username,
         email,
@@ -70,6 +86,7 @@ export const AuthProvider = ({ children }) => {
       });
       const { token, user } = response.data;
 
+      console.log('[AuthContext] Registration successful, saving token');
       localStorage.setItem('token', token);
       localStorage.setItem('user', JSON.stringify(user));
       setUser(user);
@@ -77,9 +94,15 @@ export const AuthProvider = ({ children }) => {
 
       return { success: true };
     } catch (error) {
+      console.error('[AuthContext] Registration error:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        code: error.code,
+      });
       return {
         success: false,
-        message: error.response?.data?.message || 'Registration failed',
+        message: error.response?.data?.message || error.message || 'Registration failed',
       };
     }
   };

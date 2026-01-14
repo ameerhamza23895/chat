@@ -90,15 +90,15 @@ const ChatList = ({ onSelectChat, selectedChatId }) => {
 
   return (
     <div className="h-full flex flex-col bg-slate-800 border-r border-slate-700">
-      <div className="p-4 border-b border-slate-700">
+      <div className="p-3 md:p-4 border-b border-slate-700">
         <div className="relative">
-          <FiSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400" />
+          <FiSearch className="absolute left-2 md:left-3 top-1/2 transform -translate-y-1/2 text-slate-400" size={18} />
           <input
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="Search chats or users..."
-            className="w-full pl-10 pr-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500"
+            className="w-full pl-8 md:pl-10 pr-3 md:pr-4 py-1.5 md:py-2 text-sm md:text-base bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500"
           />
         </div>
       </div>
@@ -111,7 +111,7 @@ const ChatList = ({ onSelectChat, selectedChatId }) => {
         )}
 
         {filteredChats.length > 0 && (
-          <div className="p-2">
+          <div className="p-1.5 md:p-2">
             {filteredChats.map((chat) => {
               const otherUser = getOtherParticipant(chat);
               console.log('Rendering chat with other user:', otherUser);
@@ -125,15 +125,15 @@ const ChatList = ({ onSelectChat, selectedChatId }) => {
                 <div
                   key={chat._id}
                   onClick={() => onSelectChat(otherUser)}
-                  className={`p-3 rounded-lg cursor-pointer mb-2 transition-colors ${
+                  className={`p-2.5 md:p-3 rounded-lg cursor-pointer mb-1.5 md:mb-2 transition-colors ${
                     selectedChatId === otherUser._id
                       ? 'bg-primary-600'
                       : 'bg-slate-700 hover:bg-slate-600'
                   }`}
                 >
-                  <div className="flex items-center gap-3">
-                    <div className="relative">
-                      <div className="w-12 h-12 rounded-full bg-primary-600 flex items-center justify-center text-white font-semibold">
+                  <div className="flex items-center gap-2 md:gap-3">
+                    <div className="relative flex-shrink-0">
+                      <div className="w-10 h-10 md:w-12 md:h-12 rounded-full bg-primary-600 flex items-center justify-center text-white font-semibold text-sm md:text-base">
                         {otherUser.avatar ? (
                           <img
                             src={`${BASE_URL}${otherUser.avatar}`}
@@ -148,24 +148,24 @@ const ChatList = ({ onSelectChat, selectedChatId }) => {
                         )}
                       </div>
                       {otherUser.isOnline && (
-                        <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-slate-800"></div>
+                        <div className="absolute bottom-0 right-0 w-2.5 h-2.5 md:w-3 md:h-3 bg-green-500 rounded-full border-2 border-slate-800"></div>
                       )}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
-                        <h3 className="font-semibold text-white truncate">
+                      <div className="flex items-center justify-between gap-2">
+                        <h3 className="font-semibold text-white truncate text-sm md:text-base">
                           {otherUser.username}
                         </h3>
                         {chat.lastMessageAt && (
-                          <span className="text-xs text-slate-400 ml-2">
+                          <span className="text-xs text-slate-400 flex-shrink-0">
                             {formatDistanceToNow(new Date(chat.lastMessageAt), {
                               addSuffix: true,
                             })}
                           </span>
                         )}
                       </div>
-                      <div className="flex items-center justify-between mt-1">
-                        <p className="text-sm text-slate-400 truncate">
+                      <div className="flex items-center justify-between mt-0.5 md:mt-1 gap-2">
+                        <p className="text-xs md:text-sm text-slate-400 truncate">
                           {(() => {
                             const lastMessage = chat.lastMessage;
                             if (lastMessage?.messageType === 'image' && lastMessage?.fileUrl) {
@@ -173,7 +173,7 @@ const ChatList = ({ onSelectChat, selectedChatId }) => {
                                 <img
                                   src={`${BASE_URL}${lastMessage.fileUrl}`}
                                   alt="Preview"
-                                  className="w-10 h-10 object-cover inline-block rounded"
+                                  className="w-8 h-8 md:w-10 md:h-10 object-cover inline-block rounded"
                                   onError={(e) => {
                                     e.target.style.display = 'none';
                                   }}
@@ -185,7 +185,7 @@ const ChatList = ({ onSelectChat, selectedChatId }) => {
                         </p>
 
                         {unreadCount > 0 && (
-                          <span className="ml-2 px-2 py-0.5 bg-primary-600 text-white text-xs rounded-full">
+                          <span className="ml-1 md:ml-2 px-1.5 md:px-2 py-0.5 bg-primary-600 text-white text-xs rounded-full flex-shrink-0">
                             {unreadCount}
                           </span>
                         )}
@@ -199,19 +199,19 @@ const ChatList = ({ onSelectChat, selectedChatId }) => {
         )}
 
         {searchTerm && filteredUsers.length > 0 && (
-          <div className="p-2 border-t border-slate-700">
-            <div className="px-2 py-2 text-xs font-semibold text-slate-400 uppercase">
+          <div className="p-1.5 md:p-2 border-t border-slate-700">
+            <div className="px-2 py-1.5 md:py-2 text-xs font-semibold text-slate-400 uppercase">
               Start New Chat
             </div>
             {filteredUsers.map((user) => (
               <div
                 key={user._id}
                 onClick={() => onSelectChat(user)}
-                className="p-3 rounded-lg cursor-pointer mb-2 bg-slate-700 hover:bg-slate-600 transition-colors"
+                className="p-2.5 md:p-3 rounded-lg cursor-pointer mb-1.5 md:mb-2 bg-slate-700 hover:bg-slate-600 transition-colors"
               >
-                <div className="flex items-center gap-3">
-                  <div className="relative">
-                    <div className="w-12 h-12 rounded-full bg-primary-600 flex items-center justify-center text-white font-semibold">
+                <div className="flex items-center gap-2 md:gap-3">
+                  <div className="relative flex-shrink-0">
+                    <div className="w-10 h-10 md:w-12 md:h-12 rounded-full bg-primary-600 flex items-center justify-center text-white font-semibold text-sm md:text-base">
                       {user.avatar ? (
                         <img
                           src={`${BASE_URL}${user.avatar}`}
@@ -226,16 +226,16 @@ const ChatList = ({ onSelectChat, selectedChatId }) => {
                       )}
                     </div>
                     {user.isOnline && (
-                      <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 rounded-full border-2 border-slate-800"></div>
+                      <div className="absolute bottom-0 right-0 w-2.5 h-2.5 md:w-3 md:h-3 bg-green-500 rounded-full border-2 border-slate-800"></div>
                     )}
                   </div>
-                  <div className="flex-1">
-                    <h3 className="font-semibold text-white">{user.username}</h3>
-                    <p className="text-sm text-slate-400">
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-semibold text-white text-sm md:text-base truncate">{user.username}</h3>
+                    <p className="text-xs md:text-sm text-slate-400">
                       {user.isOnline ? 'Online' : 'Offline'}
                     </p>
                   </div>
-                  <FiMessageCircle className="text-primary-400" />
+                  <FiMessageCircle className="text-primary-400 flex-shrink-0" size={18} />
                 </div>
               </div>
             ))}

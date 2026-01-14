@@ -17,22 +17,33 @@ const Register = () => {
     setError('');
     setLoading(true);
 
-    const result = await register(username, email, password);
-    setLoading(false);
+    console.log('[Register] Attempting registration for:', email);
+    console.log('[Register] API URL:', import.meta.env.VITE_API_URL || 'auto-detected');
+    
+    try {
+      const result = await register(username, email, password);
+      setLoading(false);
 
-    if (result.success) {
-      navigate('/');
-    } else {
-      setError(result.message);
+      if (result.success) {
+        console.log('[Register] Registration successful');
+        navigate('/');
+      } else {
+        console.error('[Register] Registration failed:', result.message);
+        setError(result.message);
+      }
+    } catch (error) {
+      console.error('[Register] Registration error:', error);
+      setLoading(false);
+      setError(error.response?.data?.message || error.message || 'Failed to connect to server. Check your network connection.');
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 px-4">
-      <div className="max-w-md w-full bg-slate-800 rounded-2xl shadow-2xl p-8 border border-slate-700">
-        <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-white mb-2">me-cha</h1>
-          <p className="text-slate-400">Create your account to get started.</p>
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 px-4 py-8">
+      <div className="max-w-md w-full bg-slate-800 rounded-2xl shadow-2xl p-6 md:p-8 border border-slate-700">
+        <div className="text-center mb-6 md:mb-8">
+          <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">me-cha</h1>
+          <p className="text-sm md:text-base text-slate-400">Create your account to get started.</p>
         </div>
 
         {error && (
@@ -41,7 +52,7 @@ const Register = () => {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-6">
+        <form onSubmit={handleSubmit} className="space-y-4 md:space-y-6">
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-2">
               Username
@@ -55,7 +66,7 @@ const Register = () => {
                 required
                 minLength={3}
                 maxLength={20}
-                className="w-full pl-10 pr-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                className="w-full pl-10 pr-4 py-2.5 md:py-3 text-sm md:text-base bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                 placeholder="Choose a username"
               />
             </div>
@@ -72,7 +83,7 @@ const Register = () => {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                className="w-full pl-10 pr-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                className="w-full pl-10 pr-4 py-2.5 md:py-3 text-sm md:text-base bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                 placeholder="Enter your email"
               />
             </div>
@@ -90,7 +101,7 @@ const Register = () => {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 minLength={6}
-                className="w-full pl-10 pr-4 py-3 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                className="w-full pl-10 pr-4 py-2.5 md:py-3 text-sm md:text-base bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
                 placeholder="Create a password (min. 6 characters)"
               />
             </div>
@@ -99,13 +110,13 @@ const Register = () => {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-3 bg-primary-600 hover:bg-primary-700 text-white font-semibold rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full py-2.5 md:py-3 bg-primary-600 hover:bg-primary-700 text-white font-semibold rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed text-sm md:text-base"
           >
             {loading ? 'Creating account...' : 'Register'}
           </button>
         </form>
 
-        <p className="mt-6 text-center text-slate-400">
+        <p className="mt-4 md:mt-6 text-center text-sm md:text-base text-slate-400">
           Already have an account?{' '}
           <Link to="/login" className="text-primary-400 hover:text-primary-300 font-medium">
             Login here

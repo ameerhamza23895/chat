@@ -57,35 +57,61 @@ exports.getMessages = async (req, res) => {
   try {
     const { userId } = req.params;
     const currentUserId = req.user.id;
+    const limit = parseInt(req.query.limit) || 50; // Default 50 messages per page
+    const beforeDate = req.query.beforeDate ? new Date(req.query.beforeDate) : null;
 
-    const messages = await Message.find({
+    // Build query
+    const query = {
       $or: [
         { sender: currentUserId, receiver: userId },
         { sender: userId, receiver: currentUserId },
       ],
-    })
+    };
+
+    // If beforeDate is provided, get messages before that date (for pagination)
+    if (beforeDate) {
+      query.createdAt = { $lt: beforeDate };
+    }
+
+    // Get total count for pagination info
+    const totalCount = await Message.countDocuments({
+      $or: [
+        { sender: currentUserId, receiver: userId },
+        { sender: userId, receiver: currentUserId },
+      ],
+    });
+
+    const messages = await Message.find(query)
       .populate('sender', 'username avatar')
       .populate('receiver', 'username avatar')
-      .sort({ createdAt: 1 });
+      .sort({ createdAt: -1 }) // Sort descending to get newest first
+      .limit(limit);
 
-    // Mark messages as read
-    await Message.updateMany(
-      { sender: userId, receiver: currentUserId, isRead: false },
-      { isRead: true, readAt: new Date() }
-    );
+    // Reverse to get oldest first for display
+    const sortedMessages = messages.reverse();
 
-    // Update chat unread count
-    const chat = await Chat.findOne({
-      participants: { $all: [currentUserId, userId] },
-    });
-    if (chat) {
-      chat.unreadCount.set(currentUserId.toString(), 0);
-      await chat.save();
+    // Mark messages as read (only for initial load, not pagination)
+    if (!beforeDate) {
+      await Message.updateMany(
+        { sender: userId, receiver: currentUserId, isRead: false },
+        { isRead: true, readAt: new Date() }
+      );
+
+      // Update chat unread count
+      const chat = await Chat.findOne({
+        participants: { $all: [currentUserId, userId] },
+      });
+      if (chat) {
+        chat.unreadCount.set(currentUserId.toString(), 0);
+        await chat.save();
+      }
     }
 
     res.json({
       success: true,
-      messages,
+      messages: sortedMessages,
+      hasMore: beforeDate ? messages.length === limit : sortedMessages.length < totalCount,
+      totalCount,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
