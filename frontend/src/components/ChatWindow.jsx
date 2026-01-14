@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { format } from 'date-fns';
-import { FiSend, FiPaperclip, FiSmile, FiX, FiArrowLeft, FiFile, FiFileText, FiImage, FiVideo, FiMusic, FiDownload } from 'react-icons/fi';
+import { FiSend, FiPaperclip, FiSmile, FiX, FiArrowLeft, FiFile, FiFileText, FiImage, FiVideo, FiMusic, FiDownload, FiPhone, FiVideoOff } from 'react-icons/fi';
+import CallWindow from './CallWindow';
 import { useAuth } from '../context/AuthContext';
 import { getSocket } from '../utils/socket';
 import api from '../utils/api';
@@ -16,6 +17,17 @@ const getBaseUrl = () => {
   if (envUrl) {
     console.log('[ChatWindow] Using VITE_API_URL from env:', envUrl);
     return envUrl.replace('/api', '');
+  }
+  
+  // Use relative URL to go through Vite proxy (works with HTTPS)
+  // For file URLs, we need the full URL, so use current origin
+  const useProxy = true;
+  
+  if (useProxy) {
+    // Use current origin - Vite proxy will handle /api routes
+    const baseUrl = window.location.origin;
+    console.log('[ChatWindow] Using current origin (via Vite proxy):', baseUrl);
+    return baseUrl;
   }
   
   // Auto-detect if accessing from network (not localhost)
@@ -47,11 +59,31 @@ const ChatWindow = ({ selectedUser, onBack }) => {
   const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
   const [screenSize, setScreenSize] = useState({ width: window.innerWidth, height: window.innerHeight });
+  const [callState, setCallState] = useState(null); // { type: 'video'|'audio', isIncoming: boolean, caller: user, receiver: user }
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const fileInputRef = useRef(null);
   const filePreviewRef = useRef(null); // Ref to track preview for cleanup
   const socket = getSocket();
+  
+  // Debug socket connection
+  useEffect(() => {
+    if (socket) {
+      console.log('[ChatWindow] Socket instance:', socket);
+      console.log('[ChatWindow] Socket connected:', socket.connected);
+      console.log('[ChatWindow] Socket ID:', socket.id);
+      
+      socket.on('connect', () => {
+        console.log('[ChatWindow] Socket connected event fired');
+      });
+      
+      socket.on('disconnect', () => {
+        console.log('[ChatWindow] Socket disconnected');
+      });
+    } else {
+      console.warn('[ChatWindow] No socket instance available');
+    }
+  }, [socket]);
 
   // Track screen size for responsive preview
   useEffect(() => {
@@ -78,6 +110,137 @@ const ChatWindow = ({ selectedUser, onBack }) => {
   useEffect(() => {
     filePreviewRef.current = filePreview;
   }, [filePreview]);
+
+  // Define call handlers BEFORE using them in useEffect
+  const handleIncomingCall = useCallback((data) => {
+    console.log('[ChatWindow] ========== INCOMING CALL RECEIVED ==========');
+    console.log('[ChatWindow] Call data:', JSON.stringify(data, null, 2));
+    console.log('[ChatWindow] Current user:', JSON.stringify(user, null, 2));
+    
+    // Verify the call is for the current user (not from themselves)
+    if (!user) {
+      console.error('[ChatWindow] ❌ No user logged in, cannot receive call');
+      return;
+    }
+    
+    const currentUserId = String(user._id || user.id || '');
+    const callerId = String(data.callerId || '');
+    
+    console.log('[ChatWindow] Current user ID:', currentUserId, '(type:', typeof currentUserId, ')');
+    console.log('[ChatWindow] Caller ID:', callerId, '(type:', typeof callerId, ')');
+    
+    // Don't ignore if it's from self - might be testing
+    // Just log it but still process
+    if (currentUserId === callerId) {
+      console.warn('[ChatWindow] ⚠️ Received call from self, but processing anyway');
+    }
+    
+    // This is an incoming call for the current user
+    console.log('[ChatWindow] ✅ Setting call state for incoming call');
+    console.log('[ChatWindow] Call type:', data.callType);
+    console.log('[ChatWindow] Caller:', data.caller);
+    
+    setCallState({
+      type: data.callType,
+      isIncoming: true,
+      caller: data.caller,
+      receiver: user,
+    });
+    
+    console.log('[ChatWindow] ✅ Call state set successfully');
+    console.log('[ChatWindow] ============================================');
+  }, [user]);
+
+  const handleCallRejected = useCallback(() => {
+    setCallState(null);
+    alert('Call was rejected');
+  }, []);
+
+  const handleCallEnded = useCallback(() => {
+    setCallState(null);
+  }, []);
+
+  // Register call handlers globally (not dependent on selectedUser)
+  // This ensures calls can be received even when no chat is selected
+  useEffect(() => {
+    if (!socket) {
+      console.warn('[ChatWindow] ⚠️ No socket available for call handlers');
+      return;
+    }
+
+    const registerCallHandlers = () => {
+      console.log('[ChatWindow] ✅ Registering global call event listeners');
+      console.log('[ChatWindow] Socket connected:', socket.connected);
+      console.log('[ChatWindow] Socket ID:', socket.id);
+      
+      // Remove any existing listeners first to avoid duplicates
+      socket.off('incoming-call', handleIncomingCall);
+      socket.off('call-rejected', handleCallRejected);
+      socket.off('call-ended', handleCallEnded);
+      
+      // Register handlers
+      socket.on('incoming-call', handleIncomingCall);
+      socket.on('call-rejected', handleCallRejected);
+      socket.on('call-ended', handleCallEnded);
+      
+      // Also listen to broadcast for debugging
+      socket.on('incoming-call-broadcast', (data) => {
+        console.log('[ChatWindow] 🔔🔔🔔 BROADCAST call received:', data);
+        // Check if this call is for us
+        const currentUserId = String(user?._id || user?.id || '');
+        const targetReceiverId = String(data.receiverId || '');
+        if (currentUserId === targetReceiverId) {
+          console.log('[ChatWindow] ✅ This broadcast call is for us! Processing...');
+          handleIncomingCall(data);
+        } else {
+          console.log('[ChatWindow] ⚠️ Broadcast call is not for us (we are:', currentUserId, ', target:', targetReceiverId, ')');
+        }
+      });
+      
+      console.log('[ChatWindow] ✅ Call handlers registered');
+      
+      // Test listener to verify ALL events are being received
+      const testListener = (eventName, ...args) => {
+        if (eventName === 'incoming-call' || eventName === 'incoming-call-broadcast') {
+          console.log('[ChatWindow] 🔔🔔🔔 Raw call event received via onAny:', eventName, args);
+        }
+      };
+      socket.onAny(testListener);
+      
+      // Store test listener for cleanup
+      socket._callTestListener = testListener;
+    };
+
+    if (socket.connected) {
+      // Socket already connected, register immediately
+      registerCallHandlers();
+    } else {
+      // Wait for connection
+      console.warn('[ChatWindow] ⚠️ Socket not connected, waiting for connection...');
+      const onConnect = () => {
+        console.log('[ChatWindow] ✅ Socket connected, registering call handlers');
+        registerCallHandlers();
+      };
+      socket.once('connect', onConnect);
+      
+      return () => {
+        socket.off('connect', onConnect);
+      };
+    }
+
+    return () => {
+      if (socket) {
+        console.log('[ChatWindow] Cleaning up call event listeners');
+        socket.off('incoming-call', handleIncomingCall);
+        socket.off('call-rejected', handleCallRejected);
+        socket.off('call-ended', handleCallEnded);
+        if (socket._callTestListener) {
+          socket.offAny(socket._callTestListener);
+          delete socket._callTestListener;
+        }
+      }
+    };
+  }, [socket, handleIncomingCall, handleCallRejected, handleCallEnded, user]); // Include all handlers in dependencies
 
   useEffect(() => {
     if (!selectedUser) return;
@@ -283,6 +446,96 @@ const ChatWindow = ({ selectedUser, onBack }) => {
         msg._id === data.messageId ? { ...msg, isRead: true, readAt: data.readAt } : msg
       )
     );
+  };
+
+
+  const initiateCall = (callType) => {
+    console.log('[ChatWindow] initiateCall called with type:', callType);
+    console.log('[ChatWindow] selectedUser:', selectedUser);
+    console.log('[ChatWindow] user:', user);
+    console.log('[ChatWindow] socket:', socket);
+    console.log('[ChatWindow] socket connected:', socket?.connected);
+    console.log('[ChatWindow] current callState:', callState);
+    
+    if (!selectedUser) {
+      console.error('[ChatWindow] No selectedUser, cannot initiate call');
+      alert('Please select a user to call');
+      return;
+    }
+    
+    if (!user) {
+      console.error('[ChatWindow] No user, cannot initiate call');
+      alert('User not authenticated');
+      return;
+    }
+    
+    if (!socket) {
+      console.error('[ChatWindow] No socket instance available');
+      alert('Socket not initialized. Please refresh the page.');
+      return;
+    }
+    
+    if (!socket.connected) {
+      console.error('[ChatWindow] Socket not connected. Connection state:', socket.connected);
+      alert('Not connected to server. Please check your connection and refresh the page.');
+      return;
+    }
+    
+    const receiverId = selectedUser._id || selectedUser.id;
+    if (!receiverId) {
+      console.error('[ChatWindow] No receiverId found in selectedUser');
+      alert('Invalid user selected');
+      return;
+    }
+    
+    const newCallState = {
+      type: callType,
+      isIncoming: false,
+      caller: user,
+      receiver: selectedUser,
+    };
+    
+    console.log('[ChatWindow] Setting call state to:', newCallState);
+    setCallState(newCallState);
+    console.log('[ChatWindow] Call state set, component should re-render');
+
+    console.log('[ChatWindow] Emitting initiate-call event');
+    console.log('[ChatWindow] Call data:', { receiverId, callType });
+    
+    socket.emit('initiate-call', {
+      receiverId: receiverId,
+      callType,
+    }, (response) => {
+      // Optional acknowledgment callback
+      if (response && response.error) {
+        console.error('[ChatWindow] Call initiation error:', response.error);
+        alert('Failed to initiate call: ' + response.error);
+        setCallState(null);
+      } else {
+        console.log('[ChatWindow] Call initiation acknowledged');
+      }
+    });
+  };
+  
+  // Debug effect to log callState changes
+  useEffect(() => {
+    console.log('[ChatWindow] callState changed:', callState);
+  }, [callState]);
+
+  const endCall = () => {
+    if (socket && callState) {
+      if (callState.isIncoming) {
+        socket.emit('reject-call', { callerId: callState.caller._id });
+      } else {
+        socket.emit('end-call', { receiverId: callState.receiver._id });
+      }
+    }
+    setCallState(null);
+  };
+
+  const answerCall = () => {
+    // CallWindow will handle the actual answering logic
+    // This just updates the state
   };
 
   const scrollToBottom = () => {
@@ -610,8 +863,72 @@ const ChatWindow = ({ selectedUser, onBack }) => {
               {selectedUser.isOnline ? 'Online' : 'Offline'}
             </p>
           </div>
+          
+          {/* Call Buttons */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('[ChatWindow] Video call button clicked');
+                console.log('[ChatWindow] selectedUser?.isOnline:', selectedUser?.isOnline);
+                console.log('[ChatWindow] callState:', callState);
+                if (selectedUser?.isOnline !== false && !callState) {
+                  initiateCall('video');
+                } else {
+                  console.warn('[ChatWindow] Call button disabled - user offline or call in progress');
+                }
+              }}
+              className="p-2 text-slate-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed active:scale-95"
+              title={selectedUser?.isOnline ? "Video call" : "User is offline"}
+              style={{ 
+                opacity: (!selectedUser?.isOnline || !!callState) ? 0.5 : 1,
+                cursor: (!selectedUser?.isOnline || !!callState) ? 'not-allowed' : 'pointer'
+              }}
+            >
+              <FiVideo size={20} />
+            </button>
+            <button
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('[ChatWindow] Audio call button clicked');
+                console.log('[ChatWindow] selectedUser?.isOnline:', selectedUser?.isOnline);
+                console.log('[ChatWindow] callState:', callState);
+                if (selectedUser?.isOnline !== false && !callState) {
+                  initiateCall('audio');
+                } else {
+                  console.warn('[ChatWindow] Call button disabled - user offline or call in progress');
+                }
+              }}
+              className="p-2 text-slate-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed active:scale-95"
+              title={selectedUser?.isOnline ? "Audio call" : "User is offline"}
+              style={{ 
+                opacity: (!selectedUser?.isOnline || !!callState) ? 0.5 : 1,
+                cursor: (!selectedUser?.isOnline || !!callState) ? 'not-allowed' : 'pointer'
+              }}
+            >
+              <FiPhone size={20} />
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* Call Window */}
+      {callState && (
+        <>
+          {console.log('[ChatWindow] Rendering CallWindow with state:', callState)}
+          <CallWindow
+            callType={callState.type}
+            caller={callState.caller}
+            receiver={callState.receiver}
+            isIncoming={callState.isIncoming}
+            onEndCall={endCall}
+            onAnswer={answerCall}
+            socket={socket}
+          />
+        </>
+      )}
 
       {/* Messages */}
       <div 

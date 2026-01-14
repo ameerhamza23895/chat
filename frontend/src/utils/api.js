@@ -10,6 +10,17 @@ const getApiUrl = () => {
     return envUrl;
   }
   
+  // Use relative URL to go through Vite proxy (works with HTTPS)
+  // This avoids mixed content issues (HTTPS frontend -> HTTP backend)
+  const useProxy = true;
+  
+  if (useProxy) {
+    // Use relative path - Vite proxy will handle it
+    const apiUrl = '/api';
+    console.log('[API] Using relative URL (via Vite proxy):', apiUrl);
+    return apiUrl;
+  }
+  
   // Auto-detect if accessing from network (not localhost)
   const hostname = window.location.hostname;
   
