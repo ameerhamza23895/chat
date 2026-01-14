@@ -53,6 +53,11 @@ export default defineConfig({
         ws: true, // Enable WebSocket proxying
         secure: false,
       },
+      '/uploads': {
+        target: 'http://localhost:5000',
+        changeOrigin: true,
+        secure: false, // Backend doesn't need SSL, only frontend
+      },
     },
   },
 });

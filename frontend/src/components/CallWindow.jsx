@@ -29,6 +29,7 @@ const CallWindow = ({
   const callStartTimeRef = useRef(null);
   const intervalRef = useRef(null);
   const pendingOfferRef = useRef(null);
+  const pendingIceCandidatesRef = useRef([]);
 
   // WebRTC configuration
   const rtcConfig = {
@@ -216,14 +217,30 @@ const CallWindow = ({
   const handleAnswer = async (data) => {
     try {
       if (peerConnectionRef.current) {
+        console.log('[CallWindow] 📥 Answer received from receiver');
+        console.log('[CallWindow] Answer type:', data.answer?.type);
+        console.log('[CallWindow] Current connection state:', peerConnectionRef.current.connectionState);
+        console.log('[CallWindow] Current ICE connection state:', peerConnectionRef.current.iceConnectionState);
+        
+        console.log('[CallWindow] Setting remote description from answer...');
         await peerConnectionRef.current.setRemoteDescription(
           new RTCSessionDescription(data.answer)
         );
-        setCallStatus('connected');
-        startCallTimer();
+        console.log('[CallWindow] ✅ Remote description set (caller)');
+        console.log('[CallWindow] Connection state after setting remote desc:', peerConnectionRef.current.connectionState);
+        console.log('[CallWindow] ICE connection state after setting remote desc:', peerConnectionRef.current.iceConnectionState);
+        
+        // Process any queued ICE candidates
+        await processQueuedIceCandidates();
+        
+        // Connection state will be updated by onconnectionstatechange
+        // Don't set status here, let the connection state handler do it
+      } else {
+        console.error('[CallWindow] ❌ No peer connection when answer received!');
       }
     } catch (error) {
-      console.error('Error handling answer:', error);
+      console.error('[CallWindow] ❌ Error handling answer:', error);
+      console.error('[CallWindow] Error details:', error.message, error.stack);
     }
   };
 
@@ -248,13 +265,55 @@ const CallWindow = ({
 
   const handleIceCandidate = async (data) => {
     try {
-      if (peerConnectionRef.current && data.candidate) {
+      console.log('[CallWindow] 📥 ICE candidate received:', data);
+      
+      if (!peerConnectionRef.current) {
+        console.log('[CallWindow] ⚠️ Peer connection not ready, queuing ICE candidate');
+        pendingIceCandidatesRef.current.push(data.candidate);
+        return;
+      }
+
+      // Check if remote description is set
+      if (!peerConnectionRef.current.remoteDescription) {
+        console.log('[CallWindow] ⚠️ Remote description not set, queuing ICE candidate');
+        pendingIceCandidatesRef.current.push(data.candidate);
+        return;
+      }
+
+      if (data.candidate) {
+        console.log('[CallWindow] ➕ Adding ICE candidate:', data.candidate.candidate?.substring(0, 50) + '...');
         await peerConnectionRef.current.addIceCandidate(
           new RTCIceCandidate(data.candidate)
         );
+        console.log('[CallWindow] ✅ ICE candidate added successfully');
+        console.log('[CallWindow] Current ICE connection state:', peerConnectionRef.current.iceConnectionState);
       }
     } catch (error) {
-      console.error('Error adding ICE candidate:', error);
+      console.error('[CallWindow] ❌ Error adding ICE candidate:', error);
+      console.error('[CallWindow] Error details:', error.message);
+      // Try to queue it anyway for later
+      if (data.candidate) {
+        pendingIceCandidatesRef.current.push(data.candidate);
+      }
+    }
+  };
+
+  // Process queued ICE candidates
+  const processQueuedIceCandidates = async () => {
+    if (!peerConnectionRef.current || !peerConnectionRef.current.remoteDescription) {
+      return;
+    }
+
+    while (pendingIceCandidatesRef.current.length > 0) {
+      const candidate = pendingIceCandidatesRef.current.shift();
+      try {
+        if (candidate) {
+          console.log('[CallWindow] Processing queued ICE candidate');
+          await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+        }
+      } catch (error) {
+        console.error('[CallWindow] Error processing queued ICE candidate:', error);
+      }
     }
   };
 
@@ -278,14 +337,15 @@ const CallWindow = ({
     const pc = new RTCPeerConnection(rtcConfig);
     peerConnectionRef.current = pc;
 
-    // Add local stream tracks
-    stream.getTracks().forEach(track => {
-      pc.addTrack(track, stream);
-    });
-
+    // Set up all event handlers BEFORE adding tracks or setting descriptions
     // Handle remote stream
     pc.ontrack = (event) => {
+      console.log('[CallWindow] ✅ REMOTE TRACK RECEIVED!', event);
+      console.log('[CallWindow] Track streams:', event.streams);
+      console.log('[CallWindow] Track kind:', event.track.kind);
       const remoteStream = event.streams[0];
+      console.log('[CallWindow] Remote stream:', remoteStream);
+      console.log('[CallWindow] Remote stream tracks:', remoteStream.getTracks());
       setRemoteStream(remoteStream);
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = remoteStream;
@@ -296,25 +356,73 @@ const CallWindow = ({
 
     // Handle ICE candidates
     pc.onicecandidate = (event) => {
+      console.log('[CallWindow] ICE candidate generated (receiver):', event.candidate);
       if (event.candidate && socket) {
         socket.emit('ice-candidate', {
           candidate: event.candidate,
           receiverId: offerData.callerId,
         });
+      } else if (!event.candidate) {
+        console.log('[CallWindow] ICE gathering complete (null candidate)');
       }
     };
 
-    // Set remote description and create answer
-    await pc.setRemoteDescription(new RTCSessionDescription(offerData.offer));
-    const answer = await pc.createAnswer();
-    await pc.setLocalDescription(answer);
+    // Handle connection state changes (set up BEFORE operations)
+    pc.onconnectionstatechange = () => {
+      console.log('[CallWindow] 🔄 Peer connection state changed:', pc.connectionState);
+      if (pc.connectionState === 'connected') {
+        console.log('[CallWindow] ✅✅✅ CONNECTED! ✅✅✅');
+        setCallStatus('connected');
+        startCallTimer();
+      } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+        console.error('[CallWindow] ❌ Peer connection failed or disconnected:', pc.connectionState);
+      }
+    };
 
+    // Handle ICE connection state (set up BEFORE operations)
+    pc.oniceconnectionstatechange = () => {
+      console.log('[CallWindow] 🔄 ICE connection state changed:', pc.iceConnectionState);
+      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+        console.log('[CallWindow] ✅ ICE connected!');
+      } else if (pc.iceConnectionState === 'failed') {
+        console.error('[CallWindow] ❌ ICE connection failed!');
+      }
+    };
+
+    // Handle ICE gathering state
+    pc.onicegatheringstatechange = () => {
+      console.log('[CallWindow] 🔄 ICE gathering state changed:', pc.iceGatheringState);
+    };
+
+    // Add local stream tracks AFTER handlers are set up
+    stream.getTracks().forEach(track => {
+      pc.addTrack(track, stream);
+    });
+
+    // Set remote description and create answer
+    console.log('[CallWindow] Setting remote description from offer...');
+    await pc.setRemoteDescription(new RTCSessionDescription(offerData.offer));
+    console.log('[CallWindow] ✅ Remote description set. Local description:', pc.localDescription ? 'set' : 'not set');
+    console.log('[CallWindow] Remote description:', pc.remoteDescription);
+    
+    // Process any queued ICE candidates
+    await processQueuedIceCandidates();
+    
+    console.log('[CallWindow] Creating answer...');
+    const answer = await pc.createAnswer();
+    console.log('[CallWindow] Answer created:', answer.type, answer.sdp?.substring(0, 100));
+    await pc.setLocalDescription(answer);
+    console.log('[CallWindow] ✅ Local description set. Connection state:', pc.connectionState);
+    console.log('[CallWindow] ICE connection state:', pc.iceConnectionState);
+    console.log('[CallWindow] ICE gathering state:', pc.iceGatheringState);
+
+    console.log('[CallWindow] Emitting answer-call to caller:', offerData.callerId);
     socket.emit('answer-call', {
       callerId: offerData.callerId,
       answer: answer,
     });
     
-    console.log('[CallWindow] Answer sent successfully');
+    console.log('[CallWindow] ✅ Answer sent successfully');
   };
 
   const startCall = async () => {
@@ -344,7 +452,12 @@ const CallWindow = ({
 
       // Handle remote stream
       pc.ontrack = (event) => {
+        console.log('[CallWindow] ✅ REMOTE TRACK RECEIVED (caller)!', event);
+        console.log('[CallWindow] Track streams:', event.streams);
+        console.log('[CallWindow] Track kind:', event.track.kind);
         const remoteStream = event.streams[0];
+        console.log('[CallWindow] Remote stream:', remoteStream);
+        console.log('[CallWindow] Remote stream tracks:', remoteStream.getTracks());
         setRemoteStream(remoteStream);
         if (remoteVideoRef.current) {
           remoteVideoRef.current.srcObject = remoteStream;
@@ -357,23 +470,60 @@ const CallWindow = ({
 
       // Handle ICE candidates
       pc.onicecandidate = (event) => {
+        console.log('[CallWindow] ICE candidate generated:', event.candidate);
         if (event.candidate && socket) {
           socket.emit('ice-candidate', {
             candidate: event.candidate,
             receiverId: receiver._id,
           });
+        } else if (!event.candidate) {
+          console.log('[CallWindow] ICE gathering complete (null candidate)');
         }
       };
 
-      // Create and send offer
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
+      // Handle connection state changes (set up before creating offer)
+      pc.onconnectionstatechange = () => {
+        console.log('[CallWindow] 🔄 Peer connection state changed (caller):', pc.connectionState);
+        if (pc.connectionState === 'connected') {
+          console.log('[CallWindow] ✅✅✅ CONNECTED (caller)! ✅✅✅');
+          setCallStatus('connected');
+          startCallTimer();
+        } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+          console.error('[CallWindow] ❌ Peer connection failed or disconnected (caller):', pc.connectionState);
+        }
+      };
 
+      // Handle ICE connection state (set up before creating offer)
+      pc.oniceconnectionstatechange = () => {
+        console.log('[CallWindow] 🔄 ICE connection state changed (caller):', pc.iceConnectionState);
+        if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+          console.log('[CallWindow] ✅ ICE connected (caller)!');
+        } else if (pc.iceConnectionState === 'failed') {
+          console.error('[CallWindow] ❌ ICE connection failed (caller)!');
+        }
+      };
+
+      // Handle ICE gathering state
+      pc.onicegatheringstatechange = () => {
+        console.log('[CallWindow] 🔄 ICE gathering state changed (caller):', pc.iceGatheringState);
+      };
+
+      // Create and send offer
+      console.log('[CallWindow] Creating offer...');
+      const offer = await pc.createOffer();
+      console.log('[CallWindow] Offer created:', offer.type, offer.sdp?.substring(0, 100));
+      await pc.setLocalDescription(offer);
+      console.log('[CallWindow] ✅ Local description set. Connection state:', pc.connectionState);
+      console.log('[CallWindow] ICE connection state:', pc.iceConnectionState);
+      console.log('[CallWindow] ICE gathering state:', pc.iceGatheringState);
+
+      console.log('[CallWindow] Emitting call-user to receiver:', receiver._id);
       socket.emit('call-user', {
         receiverId: receiver._id,
         callType,
         offer: offer,
       });
+      console.log('[CallWindow] ✅ Offer sent successfully');
 
     } catch (error) {
       console.error('[CallWindow] Error starting call:', error);
@@ -547,11 +697,24 @@ const CallWindow = ({
   };
 
   const endCall = () => {
+    // Calculate call duration
+    const duration = callStartTimeRef.current 
+      ? Math.floor((Date.now() - callStartTimeRef.current) / 1000)
+      : 0;
+    
     if (socket && receiver) {
-      socket.emit('end-call', { receiverId: receiver._id });
+      socket.emit('end-call', { 
+        receiverId: receiver._id,
+        callType: callType,
+        duration: duration,
+      });
     }
     if (socket && caller && isIncoming) {
-      socket.emit('end-call', { receiverId: caller._id });
+      socket.emit('end-call', { 
+        receiverId: caller._id,
+        callType: callType,
+        duration: duration,
+      });
     }
     onEndCall();
   };
@@ -789,7 +952,8 @@ const CallWindow = ({
       </div>
 
       {/* Local Video (Picture-in-Picture for video calls) */}
-      {callType === 'video' && (
+      {/* Only show local video when call is not just ringing (for incoming calls) or when we have a stream */}
+      {callType === 'video' && !(isIncoming && callStatus === 'ringing') && (
         <div className="absolute top-4 right-4 w-32 md:w-40 h-24 md:h-30 rounded-lg overflow-hidden bg-slate-800 border-2 border-slate-600 z-10">
           {localStream ? (
             <video

@@ -167,7 +167,7 @@ const initializeSocket = (io) => {
         }
         
         // Get caller user info from database for better data
-        User.findById(socket.userId).then(callerUser => {
+        User.findById(socket.userId).then(async (callerUser) => {
           const caller = callerUser ? {
             _id: callerUser._id.toString(),
             username: callerUser.username,
@@ -185,6 +185,52 @@ const initializeSocket = (io) => {
 
           console.log(`[Socket] Sending incoming-call to room: ${targetRoom}`);
           console.log(`[Socket] Call data:`, JSON.stringify(callData, null, 2));
+
+          // Save call history when call is initiated (appears for both users)
+          try {
+            // Find or create chat
+            let chat = await Chat.findOne({
+              participants: { $all: [socket.userId, receiverIdStr] },
+            });
+
+            if (!chat) {
+              chat = await Chat.create({
+                participants: [socket.userId, receiverIdStr],
+                unreadCount: new Map(),
+              });
+            }
+
+            // Determine message type based on call type
+            const messageType = callType === 'video' ? 'call-video-ended' : 'call-audio-ended';
+            
+            // Create call history message (appears for both users)
+            const callMessage = await Message.create({
+              sender: socket.userId,
+              receiver: receiverIdStr,
+              content: `${callType.charAt(0).toUpperCase() + callType.slice(1)} call`,
+              messageType: messageType,
+            });
+
+            // Update chat
+            chat.lastMessage = callMessage._id;
+            chat.lastMessageAt = callMessage.createdAt;
+            await chat.save();
+
+            // Populate message
+            await callMessage.populate('sender', 'username avatar');
+            await callMessage.populate('receiver', 'username avatar');
+
+            // Emit call history to both users
+            console.log('[Socket] 📨 Emitting call history message to caller:', socket.userId);
+            console.log('[Socket] 📨 Emitting call history message to receiver:', receiverIdStr);
+            io.to(`user_${socket.userId}`).emit('receive-message', callMessage);
+            io.to(`user_${receiverIdStr}`).emit('receive-message', callMessage);
+            console.log('[Socket] ✅ Call history messages emitted');
+          } catch (msgError) {
+            console.error('[Socket] ❌ Error saving call history:', msgError);
+            console.error('[Socket] Error stack:', msgError.stack);
+            // Don't block call initiation if history save fails
+          }
 
           // Check room membership before emitting
           const room = io.sockets.adapter.rooms.get(targetRoom);
@@ -287,9 +333,48 @@ const initializeSocket = (io) => {
     });
 
     // Handle reject-call
-    socket.on('reject-call', (data) => {
+    socket.on('reject-call', async (data) => {
       try {
         const { callerId } = data;
+        
+        // Save call history when call is rejected
+        try {
+          // Find or create chat
+          let chat = await Chat.findOne({
+            participants: { $all: [socket.userId, callerId] },
+          });
+
+          if (!chat) {
+            chat = await Chat.create({
+              participants: [socket.userId, callerId],
+              unreadCount: new Map(),
+            });
+          }
+
+          // Create call history message (call missed/rejected)
+          const callMessage = await Message.create({
+            sender: callerId,
+            receiver: socket.userId,
+            content: 'Call missed',
+            messageType: 'call-missed',
+          });
+
+          // Update chat
+          chat.lastMessage = callMessage._id;
+          chat.lastMessageAt = callMessage.createdAt;
+          await chat.save();
+
+          // Populate message
+          await callMessage.populate('sender', 'username avatar');
+          await callMessage.populate('receiver', 'username avatar');
+
+          // Emit call history to both users
+          io.to(`user_${socket.userId}`).emit('receive-message', callMessage);
+          io.to(`user_${callerId}`).emit('receive-message', callMessage);
+        } catch (msgError) {
+          console.error('Error saving call rejection history:', msgError);
+          // Don't block call rejection if history save fails
+        }
         
         // Notify caller that call was rejected
         io.to(`user_${callerId}`).emit('call-rejected', {
@@ -301,9 +386,60 @@ const initializeSocket = (io) => {
     });
 
     // Handle end-call
-    socket.on('end-call', (data) => {
+    socket.on('end-call', async (data) => {
       try {
-        const { receiverId } = data;
+        const { receiverId, callType, duration } = data;
+        
+        // Save call history for both users
+        try {
+          // Find or create chat
+          let chat = await Chat.findOne({
+            participants: { $all: [socket.userId, receiverId] },
+          });
+
+          if (!chat) {
+            chat = await Chat.create({
+              participants: [socket.userId, receiverId],
+              unreadCount: new Map(),
+            });
+          }
+
+          // Determine message type based on call type
+          const messageType = callType === 'video' ? 'call-video-ended' : 'call-audio-ended';
+          
+          // Format duration (duration is in seconds)
+          const minutes = Math.floor((duration || 0) / 60);
+          const seconds = (duration || 0) % 60;
+          const durationText = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+          
+          // Create call history message
+          const callMessage = await Message.create({
+            sender: socket.userId,
+            receiver: receiverId,
+            content: `Call ended • ${durationText}`,
+            messageType: messageType,
+          });
+
+          // Update chat
+          chat.lastMessage = callMessage._id;
+          chat.lastMessageAt = callMessage.createdAt;
+          await chat.save();
+
+          // Populate message
+          await callMessage.populate('sender', 'username avatar');
+          await callMessage.populate('receiver', 'username avatar');
+
+          // Emit call history message to both users
+          console.log('[Socket] 📨 Emitting call end history to caller:', socket.userId);
+          console.log('[Socket] 📨 Emitting call end history to receiver:', receiverId);
+          io.to(`user_${socket.userId}`).emit('receive-message', callMessage);
+          io.to(`user_${receiverId}`).emit('receive-message', callMessage);
+          console.log('[Socket] ✅ Call end history messages emitted');
+        } catch (msgError) {
+          console.error('[Socket] ❌ Error saving call history:', msgError);
+          console.error('[Socket] Error stack:', msgError.stack);
+          // Don't block call ending if history save fails
+        }
         
         // Notify receiver that call ended
         io.to(`user_${receiverId}`).emit('call-ended', {

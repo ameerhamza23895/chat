@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { format } from 'date-fns';
-import { FiSend, FiPaperclip, FiSmile, FiX, FiArrowLeft, FiFile, FiFileText, FiImage, FiVideo, FiMusic, FiDownload, FiPhone, FiVideoOff } from 'react-icons/fi';
+import { FiSend, FiPaperclip, FiSmile, FiX, FiArrowLeft, FiFile, FiFileText, FiImage, FiVideo, FiMusic, FiDownload, FiPhone, FiVideoOff, FiPhoneOff } from 'react-icons/fi';
 import CallWindow from './CallWindow';
 import { useAuth } from '../context/AuthContext';
 import { getSocket } from '../utils/socket';
@@ -60,11 +60,18 @@ const ChatWindow = ({ selectedUser, onBack }) => {
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
   const [screenSize, setScreenSize] = useState({ width: window.innerWidth, height: window.innerHeight });
   const [callState, setCallState] = useState(null); // { type: 'video'|'audio', isIncoming: boolean, caller: user, receiver: user }
+  const [userOnlineStatus, setUserOnlineStatus] = useState(null); // Track online status separately
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const fileInputRef = useRef(null);
   const filePreviewRef = useRef(null); // Ref to track preview for cleanup
   const socket = getSocket();
+  
+  // Get effective online status (from prop or state)
+  const effectiveSelectedUser = selectedUser ? {
+    ...selectedUser,
+    isOnline: userOnlineStatus !== null ? userOnlineStatus : selectedUser.isOnline
+  } : null;
   
   // Debug socket connection
   useEffect(() => {
@@ -160,6 +167,110 @@ const ChatWindow = ({ selectedUser, onBack }) => {
     setCallState(null);
   }, []);
 
+  // Define message handlers BEFORE using them in useEffect
+  const handleReceiveMessage = useCallback((message) => {
+    console.log('[ChatWindow] 📨 Received message:', message);
+    console.log('[ChatWindow] Message sender:', message.sender?._id || message.sender?.id);
+    console.log('[ChatWindow] Message receiver:', message.receiver?._id || message.receiver?.id);
+    console.log('[ChatWindow] Current user:', user?.id || user?._id);
+    console.log('[ChatWindow] Selected user:', selectedUser?._id || selectedUser?.id);
+    console.log('[ChatWindow] Message type:', message.messageType);
+    
+    // Check if message belongs to current conversation
+    const senderId = String(message.sender?._id || message.sender?.id || '');
+    const receiverId = String(message.receiver?._id || message.receiver?.id || '');
+    const currentUserId = String(user?.id || user?._id || '');
+    const selectedUserId = String(selectedUser?._id || selectedUser?.id || '');
+    
+    // Check if this message is between current user and selected user
+    const isRelevantMessage = (senderId === currentUserId && receiverId === selectedUserId) ||
+                               (senderId === selectedUserId && receiverId === currentUserId);
+    
+    console.log('[ChatWindow] Message match check:', {
+      senderId,
+      receiverId,
+      currentUserId,
+      selectedUserId,
+      isRelevantMessage,
+      hasSelectedUser: !!selectedUser
+    });
+    
+    // Add message if it's part of the current conversation
+    if (selectedUser && isRelevantMessage) {
+      console.log('[ChatWindow] ✅ Message is relevant, adding to state');
+      setMessages((prev) => {
+        // Check if message already exists to avoid duplicates
+        const exists = prev.some((msg) => msg._id === message._id);
+        if (exists) {
+          console.log('[ChatWindow] Received message already exists, skipping');
+          return prev;
+        }
+        console.log('[ChatWindow] Adding received message to state');
+        return [...prev, message];
+      });
+    } else {
+      console.log('[ChatWindow] ⚠️ Message not for current conversation - sender:', senderId, 'receiver:', receiverId, 'selected:', selectedUserId, 'current:', currentUserId);
+    }
+  }, [user, selectedUser]);
+
+  const handleMessageSent = useCallback((message) => {
+    console.log('[ChatWindow] Message sent confirmed:', message);
+    // Handle message confirmation from server (for sender)
+    const isToSelectedUser = message.receiver._id === selectedUser?._id;
+    const isFromCurrentUser = message.sender._id === user?.id || message.sender._id === user?._id;
+    
+    if (selectedUser && isFromCurrentUser && isToSelectedUser) {
+      setMessages((prev) => {
+        // Replace optimistic message with real message from server
+        const optimisticIndex = prev.findIndex(msg => msg.isOptimistic && 
+          msg.messageType === message.messageType && 
+          msg.fileName === message.fileName
+        );
+        
+        if (optimisticIndex !== -1) {
+          // Replace optimistic message with real one
+          console.log('[ChatWindow] Replacing optimistic message with confirmed message');
+          const newMessages = [...prev];
+          newMessages[optimisticIndex] = message;
+          return newMessages;
+        }
+        
+        // Check if message already exists to avoid duplicates
+        const exists = prev.some((msg) => msg._id === message._id);
+        if (exists) {
+          console.log('[ChatWindow] Message already exists, skipping');
+          return prev;
+        }
+        console.log('[ChatWindow] Adding message to state');
+        return [...prev, message];
+      });
+    }
+  }, [user, selectedUser]);
+
+  const handleMessageError = useCallback((error) => {
+    console.error('Message error:', error);
+    alert(error.message || 'Failed to send message');
+  }, []);
+
+  const handleTyping = useCallback((data) => {
+    if (selectedUser && data.userId === selectedUser._id) {
+      setIsTyping(data.isTyping);
+      setTypingUser(data.username);
+      setTimeout(() => {
+        setIsTyping(false);
+        setTypingUser(null);
+      }, 3000);
+    }
+  }, [selectedUser]);
+
+  const handleMessageRead = useCallback((data) => {
+    setMessages((prev) =>
+      prev.map((msg) =>
+        msg._id === data.messageId ? { ...msg, isRead: true, readAt: data.readAt } : msg
+      )
+    );
+  }, []);
+
   // Register call handlers globally (not dependent on selectedUser)
   // This ensures calls can be received even when no chat is selected
   useEffect(() => {
@@ -242,6 +353,29 @@ const ChatWindow = ({ selectedUser, onBack }) => {
     };
   }, [socket, handleIncomingCall, handleCallRejected, handleCallEnded, user]); // Include all handlers in dependencies
 
+  // Global message listener (always active to catch call history and other messages)
+  useEffect(() => {
+    if (!socket) return;
+
+    console.log('[ChatWindow] Setting up global message listeners');
+    socket.on('receive-message', handleReceiveMessage);
+    socket.on('message-sent', handleMessageSent);
+    socket.on('user-typing', handleTyping);
+    socket.on('message-read', handleMessageRead);
+    socket.on('message-error', handleMessageError);
+
+    return () => {
+      if (socket) {
+        console.log('[ChatWindow] Cleaning up global message listeners');
+        socket.off('receive-message', handleReceiveMessage);
+        socket.off('message-sent', handleMessageSent);
+        socket.off('user-typing', handleTyping);
+        socket.off('message-read', handleMessageRead);
+        socket.off('message-error', handleMessageError);
+      }
+    };
+  }, [socket, handleReceiveMessage]);
+
   useEffect(() => {
     if (!selectedUser) return;
 
@@ -251,25 +385,45 @@ const ChatWindow = ({ selectedUser, onBack }) => {
     setLoadingOlderMessages(false);
     
     fetchMessages();
-    
-    if (socket) {
-      socket.on('receive-message', handleReceiveMessage);
-      socket.on('message-sent', handleMessageSent);
-      socket.on('user-typing', handleTyping);
-      socket.on('message-read', handleMessageRead);
-      socket.on('message-error', handleMessageError);
-    }
+  }, [selectedUser]);
 
-    return () => {
-      if (socket) {
-        socket.off('receive-message', handleReceiveMessage);
-        socket.off('message-sent', handleMessageSent);
-        socket.off('user-typing', handleTyping);
-        socket.off('message-read', handleMessageRead);
-        socket.off('message-error', handleMessageError);
+  // Reset online status when selectedUser changes
+  useEffect(() => {
+    if (selectedUser) {
+      setUserOnlineStatus(selectedUser.isOnline !== undefined ? selectedUser.isOnline : null);
+    } else {
+      setUserOnlineStatus(null);
+    }
+  }, [selectedUser]);
+
+  // Listen for user online/offline events to update selectedUser status
+  useEffect(() => {
+    if (!socket || !selectedUser) return;
+
+    const handleUserOnline = (data) => {
+      const { userId } = data;
+      if (selectedUser._id === userId || selectedUser.id === userId) {
+        console.log('[ChatWindow] Selected user came online:', selectedUser.username);
+        setUserOnlineStatus(true);
       }
     };
-  }, [selectedUser]);
+
+    const handleUserOffline = (data) => {
+      const { userId } = data;
+      if (selectedUser._id === userId || selectedUser.id === userId) {
+        console.log('[ChatWindow] Selected user went offline:', selectedUser.username);
+        setUserOnlineStatus(false);
+      }
+    };
+
+    socket.on('user-online', handleUserOnline);
+    socket.on('user-offline', handleUserOffline);
+
+    return () => {
+      socket.off('user-online', handleUserOnline);
+      socket.off('user-offline', handleUserOffline);
+    };
+  }, [socket, selectedUser]);
 
   // Add scroll listener for infinite scroll
   useEffect(() => {
@@ -365,87 +519,6 @@ const ChatWindow = ({ selectedUser, onBack }) => {
     if (container.scrollTop < 200 && hasMoreMessages && !loadingOlderMessages) {
       loadOlderMessages();
     }
-  };
-
-  const handleReceiveMessage = (message) => {
-    console.log('[ChatWindow] Received message:', message);
-    // Check if message belongs to current conversation
-    const isFromSelectedUser = message.sender._id === selectedUser._id;
-    const isToCurrentUser = message.receiver._id === user.id;
-    const isFromCurrentUser = message.sender._id === user.id;
-    const isToSelectedUser = message.receiver._id === selectedUser._id;
-    
-    // Add message if it's part of the current conversation
-    if ((isFromSelectedUser && isToCurrentUser) || (isFromCurrentUser && isToSelectedUser)) {
-      setMessages((prev) => {
-        // Check if message already exists to avoid duplicates
-        const exists = prev.some((msg) => msg._id === message._id);
-        if (exists) {
-          console.log('[ChatWindow] Received message already exists, skipping');
-          return prev;
-        }
-        console.log('[ChatWindow] Adding received message to state');
-        return [...prev, message];
-      });
-    }
-  };
-
-  const handleMessageSent = (message) => {
-    console.log('[ChatWindow] Message sent confirmed:', message);
-    // Handle message confirmation from server (for sender)
-    const isToSelectedUser = message.receiver._id === selectedUser._id;
-    const isFromCurrentUser = message.sender._id === user.id;
-    
-    if (isFromCurrentUser && isToSelectedUser) {
-      setMessages((prev) => {
-        // Replace optimistic message with real message from server
-        const optimisticIndex = prev.findIndex(msg => msg.isOptimistic && 
-          msg.messageType === message.messageType && 
-          msg.fileName === message.fileName
-        );
-        
-        if (optimisticIndex !== -1) {
-          // Replace optimistic message with real one
-          console.log('[ChatWindow] Replacing optimistic message with confirmed message');
-          const newMessages = [...prev];
-          newMessages[optimisticIndex] = message;
-          return newMessages;
-        }
-        
-        // Check if message already exists to avoid duplicates
-        const exists = prev.some((msg) => msg._id === message._id);
-        if (exists) {
-          console.log('[ChatWindow] Message already exists, skipping');
-          return prev;
-        }
-        console.log('[ChatWindow] Adding message to state');
-        return [...prev, message];
-      });
-    }
-  };
-
-  const handleMessageError = (error) => {
-    console.error('Message error:', error);
-    alert(error.message || 'Failed to send message');
-  };
-
-  const handleTyping = (data) => {
-    if (data.userId === selectedUser._id) {
-      setIsTyping(data.isTyping);
-      setTypingUser(data.username);
-      setTimeout(() => {
-        setIsTyping(false);
-        setTypingUser(null);
-      }, 3000);
-    }
-  };
-
-  const handleMessageRead = (data) => {
-    setMessages((prev) =>
-      prev.map((msg) =>
-        msg._id === data.messageId ? { ...msg, isRead: true, readAt: data.readAt } : msg
-      )
-    );
   };
 
 
@@ -720,8 +793,11 @@ const ChatWindow = ({ selectedUser, onBack }) => {
     
     switch (message.messageType) {
       case 'image':
+        // Use relative URL if it starts with /, otherwise construct full URL
         const imageUrl = message.fileUrl?.startsWith('http') 
           ? message.fileUrl 
+          : message.fileUrl?.startsWith('/')
+          ? message.fileUrl  // Relative URL - will go through Vite proxy
           : `${BASE_URL}${message.fileUrl}`;
         
         return (
@@ -732,8 +808,9 @@ const ChatWindow = ({ selectedUser, onBack }) => {
             style={{ maxHeight: '400px', minHeight: '150px' }}
             onClick={() => window.open(imageUrl, '_blank')}
             onError={(e) => {
-              console.error('Failed to load image:', imageUrl, 'Original fileUrl:', message.fileUrl);
-              console.error('BASE_URL:', BASE_URL);
+              console.error('[ChatWindow] Failed to load image:', imageUrl, 'Original fileUrl:', message.fileUrl);
+              console.error('[ChatWindow] BASE_URL:', BASE_URL);
+              console.error('[ChatWindow] Current origin:', window.location.origin);
               // Show error message instead of hiding
               e.target.style.display = 'none';
               const errorDiv = document.createElement('div');
@@ -742,13 +819,16 @@ const ChatWindow = ({ selectedUser, onBack }) => {
               e.target.parentNode?.appendChild(errorDiv);
             }}
             onLoad={() => {
-              console.log('Image loaded successfully:', imageUrl);
+              console.log('[ChatWindow] Image loaded successfully:', imageUrl);
             }}
           />
         );
       case 'video':
+        // Use relative URL if it starts with /, otherwise construct full URL
         const videoUrl = message.fileUrl?.startsWith('http') 
           ? message.fileUrl 
+          : message.fileUrl?.startsWith('/')
+          ? message.fileUrl  // Relative URL - will go through Vite proxy
           : `${BASE_URL}${message.fileUrl}`;
         return (
           <div className="w-full bg-black rounded-lg overflow-hidden" style={{ maxHeight: '400px' }}>
@@ -759,15 +839,18 @@ const ChatWindow = ({ selectedUser, onBack }) => {
               height="100%"
               style={{ maxHeight: '400px' }}
               onError={(error) => {
-                console.error('Failed to load video:', videoUrl, 'Original fileUrl:', message.fileUrl);
-                console.error('BASE_URL:', BASE_URL);
+                console.error('[ChatWindow] Failed to load video:', videoUrl, 'Original fileUrl:', message.fileUrl);
+                console.error('[ChatWindow] BASE_URL:', BASE_URL);
               }}
             />
           </div>
         );
       case 'audio':
+        // Use relative URL if it starts with /, otherwise construct full URL
         const audioUrl = message.fileUrl?.startsWith('http') 
           ? message.fileUrl 
+          : message.fileUrl?.startsWith('/')
+          ? message.fileUrl  // Relative URL - will go through Vite proxy
           : `${BASE_URL}${message.fileUrl}`;
         return (
           <div className="max-w-[280px] sm:max-w-xs">
@@ -776,15 +859,18 @@ const ChatWindow = ({ selectedUser, onBack }) => {
               controls
               className="w-full"
               onError={(e) => {
-                console.error('Failed to load audio:', audioUrl, 'Original fileUrl:', message.fileUrl);
-                console.error('BASE_URL:', BASE_URL);
+                console.error('[ChatWindow] Failed to load audio:', audioUrl, 'Original fileUrl:', message.fileUrl);
+                console.error('[ChatWindow] BASE_URL:', BASE_URL);
               }}
             />
           </div>
         );
       case 'file':
+        // Use relative URL if it starts with /, otherwise construct full URL
         const fileUrl = message.fileUrl?.startsWith('http') 
           ? message.fileUrl 
+          : message.fileUrl?.startsWith('/')
+          ? message.fileUrl  // Relative URL - will go through Vite proxy
           : `${BASE_URL}${message.fileUrl}`;
         return (
           <a
@@ -805,6 +891,17 @@ const ChatWindow = ({ selectedUser, onBack }) => {
             </div>
             <FiDownload className="text-white flex-shrink-0" size={16} />
           </a>
+        );
+      case 'call-video-ended':
+      case 'call-audio-ended':
+      case 'call-missed':
+        const isVideoCall = message.messageType === 'call-video-ended';
+        const CallIcon = isVideoCall ? FiVideo : FiPhone;
+        return (
+          <div className="flex items-center gap-2 px-3 py-2">
+            <CallIcon className="text-white flex-shrink-0" size={18} />
+            <span className="text-white text-sm md:text-base">{message.content || 'Call ended'}</span>
+          </div>
         );
       default:
         return <p className="text-white whitespace-pre-wrap break-words text-sm md:text-base">{message.content}</p>;
@@ -842,10 +939,11 @@ const ChatWindow = ({ selectedUser, onBack }) => {
             <div className="w-8 h-8 md:w-10 md:h-10 rounded-full bg-primary-600 flex items-center justify-center text-white font-semibold text-sm md:text-base">
               {selectedUser.avatar ? (
                 <img
-                  src={`${BASE_URL}${selectedUser.avatar}`}
+                  src={selectedUser.avatar?.startsWith('/') ? selectedUser.avatar : `${BASE_URL}${selectedUser.avatar}`}
                   alt={selectedUser.username}
                   className="w-full h-full rounded-full object-cover"
                   onError={(e) => {
+                    console.error('[ChatWindow] Failed to load avatar:', selectedUser.avatar);
                     e.target.style.display = 'none';
                   }}
                 />
@@ -853,14 +951,14 @@ const ChatWindow = ({ selectedUser, onBack }) => {
                 selectedUser.username.charAt(0).toUpperCase()
               )}
             </div>
-            {selectedUser.isOnline && (
+            {effectiveSelectedUser?.isOnline && (
               <div className="absolute bottom-0 right-0 w-2.5 h-2.5 md:w-3 md:h-3 bg-green-500 rounded-full border-2 border-slate-800"></div>
             )}
           </div>
           <div className="flex-1 min-w-0">
             <h3 className="font-semibold text-white text-sm md:text-base truncate">{selectedUser.username}</h3>
             <p className="text-xs md:text-sm text-slate-400">
-              {selectedUser.isOnline ? 'Online' : 'Offline'}
+              {effectiveSelectedUser?.isOnline ? 'Online' : 'Offline'}
             </p>
           </div>
           
@@ -871,19 +969,21 @@ const ChatWindow = ({ selectedUser, onBack }) => {
                 e.preventDefault();
                 e.stopPropagation();
                 console.log('[ChatWindow] Video call button clicked');
-                console.log('[ChatWindow] selectedUser?.isOnline:', selectedUser?.isOnline);
+                console.log('[ChatWindow] selectedUser?.isOnline:', effectiveSelectedUser?.isOnline);
                 console.log('[ChatWindow] callState:', callState);
-                if (selectedUser?.isOnline !== false && !callState) {
+                // Allow calls if isOnline is undefined/null (not explicitly false) and no call in progress
+                const canCall = (effectiveSelectedUser?.isOnline !== false && !callState);
+                if (canCall) {
                   initiateCall('video');
                 } else {
                   console.warn('[ChatWindow] Call button disabled - user offline or call in progress');
                 }
               }}
               className="p-2 text-slate-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed active:scale-95"
-              title={selectedUser?.isOnline ? "Video call" : "User is offline"}
+              title={effectiveSelectedUser?.isOnline === false ? "User is offline" : "Video call"}
               style={{ 
-                opacity: (!selectedUser?.isOnline || !!callState) ? 0.5 : 1,
-                cursor: (!selectedUser?.isOnline || !!callState) ? 'not-allowed' : 'pointer'
+                opacity: (effectiveSelectedUser?.isOnline === false || !!callState) ? 0.5 : 1,
+                cursor: (effectiveSelectedUser?.isOnline === false || !!callState) ? 'not-allowed' : 'pointer'
               }}
             >
               <FiVideo size={20} />
@@ -893,19 +993,21 @@ const ChatWindow = ({ selectedUser, onBack }) => {
                 e.preventDefault();
                 e.stopPropagation();
                 console.log('[ChatWindow] Audio call button clicked');
-                console.log('[ChatWindow] selectedUser?.isOnline:', selectedUser?.isOnline);
+                console.log('[ChatWindow] selectedUser?.isOnline:', effectiveSelectedUser?.isOnline);
                 console.log('[ChatWindow] callState:', callState);
-                if (selectedUser?.isOnline !== false && !callState) {
+                // Allow calls if isOnline is undefined/null (not explicitly false) and no call in progress
+                const canCall = (effectiveSelectedUser?.isOnline !== false && !callState);
+                if (canCall) {
                   initiateCall('audio');
                 } else {
                   console.warn('[ChatWindow] Call button disabled - user offline or call in progress');
                 }
               }}
               className="p-2 text-slate-400 hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed active:scale-95"
-              title={selectedUser?.isOnline ? "Audio call" : "User is offline"}
+              title={effectiveSelectedUser?.isOnline === false ? "User is offline" : "Audio call"}
               style={{ 
-                opacity: (!selectedUser?.isOnline || !!callState) ? 0.5 : 1,
-                cursor: (!selectedUser?.isOnline || !!callState) ? 'not-allowed' : 'pointer'
+                opacity: (effectiveSelectedUser?.isOnline === false || !!callState) ? 0.5 : 1,
+                cursor: (effectiveSelectedUser?.isOnline === false || !!callState) ? 'not-allowed' : 'pointer'
               }}
             >
               <FiPhone size={20} />
@@ -960,6 +1062,26 @@ const ChatWindow = ({ selectedUser, onBack }) => {
         {messages.map((message) => {
           const isOwn = message.sender._id === user.id;
           const isMedia = ['image', 'video', 'audio', 'file'].includes(message.messageType);
+          const isCallHistory = ['call-video-ended', 'call-audio-ended', 'call-missed'].includes(message.messageType);
+          
+          // Call history messages are centered
+          if (isCallHistory) {
+            return (
+              <div
+                key={message._id}
+                className="flex justify-center"
+              >
+                <div className="max-w-[85%] sm:max-w-[75%] md:max-w-[70%] flex flex-col items-center">
+                  <div className="rounded-2xl bg-slate-700/50 text-slate-300 px-3 py-1.5 md:px-4 md:py-2">
+                    {renderMessageContent(message)}
+                  </div>
+                  <span className="text-xs text-slate-500 mt-1">
+                    {format(new Date(message.createdAt), 'HH:mm')}
+                  </span>
+                </div>
+              </div>
+            );
+          }
           
           return (
             <div

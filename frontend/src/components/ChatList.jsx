@@ -2,9 +2,22 @@ import React, { useState, useEffect } from 'react';
 import { formatDistanceToNow } from 'date-fns';
 import api from '../utils/api';
 import { FiSearch, FiMessageCircle } from 'react-icons/fi';
+import { getSocket } from '../utils/socket';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-const BASE_URL = API_BASE_URL.replace('/api', '');
+// Dynamic BASE_URL detection for HTTPS compatibility
+const getBaseUrl = () => {
+  const envUrl = import.meta.env.VITE_API_URL;
+  
+  // If VITE_API_URL is set, use it
+  if (envUrl) {
+    return envUrl.replace('/api', '');
+  }
+  
+  // Use current origin for HTTPS compatibility (goes through Vite proxy)
+  return window.location.origin;
+};
+
+const BASE_URL = getBaseUrl();
 
 const ChatList = ({ onSelectChat, selectedChatId }) => {
   const [chats, setChats] = useState([]);
@@ -15,6 +28,72 @@ const ChatList = ({ onSelectChat, selectedChatId }) => {
   useEffect(() => {
     fetchChats();
     fetchUsers();
+  }, []);
+
+  // Listen for user online/offline events
+  useEffect(() => {
+    const socket = getSocket();
+    if (!socket) return;
+
+    const handleUserOnline = (data) => {
+      console.log('[ChatList] User online:', data);
+      const { userId } = data;
+      
+      // Update users array
+      setUsers(prevUsers => 
+        prevUsers.map(user => 
+          user._id === userId || user.id === userId 
+            ? { ...user, isOnline: true }
+            : user
+        )
+      );
+      
+      // Update chats array (participants)
+      setChats(prevChats => 
+        prevChats.map(chat => ({
+          ...chat,
+          participants: chat.participants.map(p => 
+            (p._id === userId || p.id === userId) 
+              ? { ...p, isOnline: true }
+              : p
+          )
+        }))
+      );
+    };
+
+    const handleUserOffline = (data) => {
+      console.log('[ChatList] User offline:', data);
+      const { userId } = data;
+      
+      // Update users array
+      setUsers(prevUsers => 
+        prevUsers.map(user => 
+          user._id === userId || user.id === userId 
+            ? { ...user, isOnline: false }
+            : user
+        )
+      );
+      
+      // Update chats array (participants)
+      setChats(prevChats => 
+        prevChats.map(chat => ({
+          ...chat,
+          participants: chat.participants.map(p => 
+            (p._id === userId || p.id === userId) 
+              ? { ...p, isOnline: false }
+              : p
+          )
+        }))
+      );
+    };
+
+    socket.on('user-online', handleUserOnline);
+    socket.on('user-offline', handleUserOffline);
+
+    return () => {
+      socket.off('user-online', handleUserOnline);
+      socket.off('user-offline', handleUserOffline);
+    };
   }, []);
 
   const fetchChats = async () => {
@@ -136,10 +215,11 @@ const ChatList = ({ onSelectChat, selectedChatId }) => {
                       <div className="w-10 h-10 md:w-12 md:h-12 rounded-full bg-primary-600 flex items-center justify-center text-white font-semibold text-sm md:text-base">
                         {otherUser.avatar ? (
                           <img
-                            src={`${BASE_URL}${otherUser.avatar}`}
+                            src={otherUser.avatar?.startsWith('/') ? otherUser.avatar : `${BASE_URL}${otherUser.avatar}`}
                             alt={otherUser.username}
                             className="w-full h-full rounded-full object-cover"
                             onError={(e) => {
+                              console.error('[ChatList] Failed to load avatar:', otherUser.avatar);
                               e.target.style.display = 'none';
                             }}
                           />
@@ -169,12 +249,16 @@ const ChatList = ({ onSelectChat, selectedChatId }) => {
                           {(() => {
                             const lastMessage = chat.lastMessage;
                             if (lastMessage?.messageType === 'image' && lastMessage?.fileUrl) {
+                              const previewUrl = lastMessage.fileUrl?.startsWith('/') 
+                                ? lastMessage.fileUrl 
+                                : `${BASE_URL}${lastMessage.fileUrl}`;
                               return (
                                 <img
-                                  src={`${BASE_URL}${lastMessage.fileUrl}`}
+                                  src={previewUrl}
                                   alt="Preview"
                                   className="w-8 h-8 md:w-10 md:h-10 object-cover inline-block rounded"
                                   onError={(e) => {
+                                    console.error('[ChatList] Failed to load image preview:', previewUrl);
                                     e.target.style.display = 'none';
                                   }}
                                 />
@@ -214,10 +298,11 @@ const ChatList = ({ onSelectChat, selectedChatId }) => {
                     <div className="w-10 h-10 md:w-12 md:h-12 rounded-full bg-primary-600 flex items-center justify-center text-white font-semibold text-sm md:text-base">
                       {user.avatar ? (
                         <img
-                          src={`${BASE_URL}${user.avatar}`}
+                          src={user.avatar?.startsWith('/') ? user.avatar : `${BASE_URL}${user.avatar}`}
                           alt={user.username}
                           className="w-full h-full rounded-full object-cover"
                           onError={(e) => {
+                            console.error('[ChatList] Failed to load user avatar:', user.avatar);
                             e.target.style.display = 'none';
                           }}
                         />

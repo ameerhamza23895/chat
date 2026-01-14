@@ -4,8 +4,20 @@ import { useNavigate } from 'react-router-dom';
 import { FiArrowLeft, FiUpload, FiUser } from 'react-icons/fi';
 import api from '../utils/api';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-const BASE_URL = API_BASE_URL.replace('/api', '');
+// Dynamic BASE_URL detection for HTTPS compatibility
+const getBaseUrl = () => {
+  const envUrl = import.meta.env.VITE_API_URL;
+  
+  // If VITE_API_URL is set, use it
+  if (envUrl) {
+    return envUrl.replace('/api', '');
+  }
+  
+  // Use current origin for HTTPS compatibility (goes through Vite proxy)
+  return window.location.origin;
+};
+
+const BASE_URL = getBaseUrl();
 
 const Profile = () => {
   const { user, logout } = useAuth();
@@ -64,10 +76,11 @@ const Profile = () => {
                 <div className="w-24 h-24 md:w-32 md:h-32 rounded-full bg-primary-600 flex items-center justify-center text-white text-2xl md:text-4xl font-semibold overflow-hidden">
                   {avatar ? (
                     <img
-                      src={`${BASE_URL}${avatar}`}
+                      src={avatar?.startsWith('/') ? avatar : `${BASE_URL}${avatar}`}
                       alt={user?.username}
                       className="w-full h-full object-cover"
                       onError={(e) => {
+                        console.error('[Profile] Failed to load avatar:', avatar);
                         e.target.style.display = 'none';
                       }}
                     />

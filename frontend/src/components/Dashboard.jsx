@@ -5,8 +5,20 @@ import ChatList from './ChatList';
 import ChatWindow from './ChatWindow';
 import { useNavigate } from 'react-router-dom';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
-const BASE_URL = API_BASE_URL.replace('/api', '');
+// Dynamic BASE_URL detection for HTTPS compatibility
+const getBaseUrl = () => {
+  const envUrl = import.meta.env.VITE_API_URL;
+  
+  // If VITE_API_URL is set, use it
+  if (envUrl) {
+    return envUrl.replace('/api', '');
+  }
+  
+  // Use current origin for HTTPS compatibility (goes through Vite proxy)
+  return window.location.origin;
+};
+
+const BASE_URL = getBaseUrl();
 
 const Dashboard = () => {
   const { user, logout } = useAuth();
@@ -52,10 +64,11 @@ const Dashboard = () => {
           <div className="w-8 h-8 md:w-10 md:h-10 rounded-full bg-primary-600 flex items-center justify-center text-white font-semibold text-sm md:text-base">
             {user?.avatar ? (
               <img
-                src={`${BASE_URL}${user.avatar}`}
+                src={user.avatar?.startsWith('/') ? user.avatar : `${BASE_URL}${user.avatar}`}
                 alt={user.username}
                 className="w-full h-full rounded-full object-cover"
                 onError={(e) => {
+                  console.error('[Dashboard] Failed to load avatar:', user.avatar);
                   e.target.style.display = 'none';
                 }}
               />
