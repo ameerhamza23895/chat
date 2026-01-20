@@ -2,6 +2,9 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Message = require('../models/Message');
 const Chat = require('../models/Chat');
+const cache = require('../utils/cache');
+const logger = require('../utils/logger');
+const { deleteDisappearingMessagesAfterRead } = require('../utils/messageDeletion');
 
 const authenticateSocket = async (socket, next) => {
   try {
@@ -30,13 +33,16 @@ const initializeSocket = (io) => {
   io.use(authenticateSocket);
 
   io.on('connection', async (socket) => {
-    console.log(`User connected: ${socket.username} (${socket.userId})`);
+    logger.info('User connected', { userId: socket.userId, username: socket.username });
 
     // Update user online status
     await User.findByIdAndUpdate(socket.userId, {
       isOnline: true,
       lastSeen: new Date(),
     });
+
+    // Clear user cache
+    await cache.del(`user:${socket.userId}`);
 
     // Join user's personal room
     const userRoom = `user_${socket.userId}`;
@@ -65,6 +71,12 @@ const initializeSocket = (io) => {
       try {
         const { receiverId, content, messageType, fileUrl, fileName, fileSize, mimeType } = data;
 
+        // Validate receiver exists
+        if (socket.userId === receiverId) {
+          socket.emit('message-error', { message: 'Cannot send message to yourself' });
+          return;
+        }
+
         // Create or update chat
         let chat = await Chat.findOne({
           participants: { $all: [socket.userId, receiverId] },
@@ -77,16 +89,29 @@ const initializeSocket = (io) => {
           });
         }
 
+        // Handle disappearing message settings
+        const isDisappearing = data.isDisappearing || false;
+        const disappearAfterRead = data.disappearAfterRead || false;
+        const disappearInSeconds = data.disappearInSeconds || null;
+        
+        let disappearAt = null;
+        if (isDisappearing && !disappearAfterRead && disappearInSeconds) {
+          disappearAt = new Date(Date.now() + disappearInSeconds * 1000);
+        }
+
         // Create message
         const message = await Message.create({
           sender: socket.userId,
           receiver: receiverId,
-          content,
+          content: content || '',
           messageType: messageType || 'text',
           fileUrl: fileUrl || '',
           fileName: fileName || '',
           fileSize: fileSize || 0,
           mimeType: mimeType || '',
+          isDisappearing: isDisappearing,
+          disappearAfterRead: disappearAfterRead,
+          disappearAt: disappearAt,
         });
 
         // Update chat
@@ -96,6 +121,12 @@ const initializeSocket = (io) => {
         const currentUnread = chat.unreadCount.get(receiverId) || 0;
         chat.unreadCount.set(receiverId, currentUnread + 1);
         await chat.save();
+
+        // Clear cache
+        await cache.del(`chats:${socket.userId}`);
+        await cache.del(`chats:${receiverId}`);
+        await cache.del(`messages:count:${socket.userId}:${receiverId}`);
+        await cache.del(`messages:count:${receiverId}:${socket.userId}`);
 
         // Populate message
         await message.populate('sender', 'username avatar');
@@ -107,6 +138,7 @@ const initializeSocket = (io) => {
         // Emit confirmation to sender
         socket.emit('message-sent', message);
       } catch (error) {
+        logger.error('Send message socket error', { error: error.message, userId: socket.userId });
         socket.emit('message-error', { message: error.message });
       }
     });
@@ -124,21 +156,35 @@ const initializeSocket = (io) => {
     socket.on('mark-read', async (data) => {
       try {
         const { messageId } = data;
+        console.log('[Socket] mark-read event received for message:', messageId);
         const message = await Message.findById(messageId);
 
         if (message && message.receiver.toString() === socket.userId) {
+          console.log('[Socket] Marking message as read:', messageId);
           message.isRead = true;
           message.readAt = new Date();
           await message.save();
 
+          // Handle disappearing messages that should be deleted after read
+          console.log('[Socket] Checking if message should be deleted (disappearing):', {
+            isDisappearing: message.isDisappearing,
+            disappearAfterRead: message.disappearAfterRead,
+            isRead: message.isRead,
+          });
+          await deleteDisappearingMessagesAfterRead(io, [message._id]);
+
           // Notify sender
-          io.to(`user_${message.sender}`).emit('message-read', {
+          const senderId = message.sender.toString();
+          io.to(`user_${senderId}`).emit('message-read', {
             messageId: message._id,
             readAt: message.readAt,
           });
+        } else {
+          console.log('[Socket] Message not found or not authorized to mark as read');
         }
       } catch (error) {
-        console.error('Error marking message as read:', error);
+        console.error('[Socket] ❌ Error marking message as read:', error.message);
+        logger.error('Error marking message as read', { error: error.message });
       }
     });
 
@@ -467,13 +513,16 @@ const initializeSocket = (io) => {
 
     // Handle disconnect
     socket.on('disconnect', async () => {
-      console.log(`User disconnected: ${socket.username} (${socket.userId})`);
+      logger.info('User disconnected', { userId: socket.userId, username: socket.username });
 
       // Update user offline status
       await User.findByIdAndUpdate(socket.userId, {
         isOnline: false,
         lastSeen: new Date(),
       });
+
+      // Clear user cache
+      await cache.del(`user:${socket.userId}`);
 
       // Broadcast user offline status
       socket.broadcast.emit('user-offline', {

@@ -52,6 +52,24 @@ export default defineConfig({
         changeOrigin: true,
         ws: true, // Enable WebSocket proxying
         secure: false,
+        // Better error handling for WebSocket connections
+        configure: (proxy, _options) => {
+          proxy.on('error', (err, _req, _res) => {
+            // Suppress common WebSocket proxy errors (they're usually harmless)
+            if (err.code !== 'ECONNRESET' && err.code !== 'ECONNREFUSED') {
+              console.error('Proxy error:', err);
+            }
+          });
+          proxy.on('proxyReqWs', (proxyReq, _req, _socket) => {
+            // Handle WebSocket upgrade
+            proxyReq.on('error', (err) => {
+              // Suppress connection reset errors
+              if (err.code !== 'ECONNRESET') {
+                console.error('WebSocket proxy error:', err);
+              }
+            });
+          });
+        },
       },
       '/uploads': {
         target: 'http://localhost:5000',

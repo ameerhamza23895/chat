@@ -7,8 +7,17 @@ const compression = require('compression');
 const path = require('path');
 require('dotenv').config();
 
+// Validate environment variables
+const validateEnv = require('./utils/envValidator');
+validateEnv();
+
 const connectDB = require('./config/db');
 const initializeSocket = require('./socket/socketHandler');
+const errorHandler = require('./middleware/errorHandler');
+const { apiLimiter } = require('./middleware/rateLimiter');
+const { initCache } = require('./utils/cache');
+const logger = require('./utils/logger');
+const messageController = require('./controllers/messageController');
 
 // Import routes
 const authRoutes = require('./routes/authRoutes');
@@ -18,6 +27,15 @@ const uploadRoutes = require('./routes/uploadRoutes');
 
 // Connect to database
 connectDB();
+
+// Initialize cache
+initCache().catch(err => {
+  logger.warn('Cache initialization failed', { error: err.message });
+});
+
+// Start disappearing messages cleanup
+const { startCleanupInterval } = require('./utils/disappearingMessages');
+startCleanupInterval();
 
 const app = express();
 const server = http.createServer(app);
@@ -114,6 +132,7 @@ if (process.env.REDIS_HOST && process.env.REDIS_PORT) {
       
       io.adapter(createAdapter(pubClient, subClient));
       initializeSocket(io);
+      messageController.setIoInstance(io); // Pass io to message controller
       console.log('Socket.io with Redis adapter initialized');
     }).catch(err => {
       console.log('Redis not available, using default adapter');
@@ -121,6 +140,7 @@ if (process.env.REDIS_HOST && process.env.REDIS_PORT) {
         cors: socketCorsOptions,
       });
       initializeSocket(io);
+      messageController.setIoInstance(io); // Pass io to message controller
     });
   } catch (error) {
     console.log('Redis not available, using default adapter');
@@ -128,12 +148,14 @@ if (process.env.REDIS_HOST && process.env.REDIS_PORT) {
       cors: socketCorsOptions,
     });
     initializeSocket(io);
+    messageController.setIoInstance(io); // Pass io to message controller
   }
 } else {
   io = socketIo(server, {
     cors: socketCorsOptions,
   });
   initializeSocket(io);
+  messageController.setIoInstance(io); // Pass io to message controller
 }
 
 // Request logging middleware
@@ -151,11 +173,23 @@ app.use((req, res, next) => {
 app.use(helmet({
   crossOriginResourcePolicy: { policy: "cross-origin" },
   crossOriginEmbedderPolicy: false,
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "blob:", "https:"],
+      connectSrc: ["'self'", "ws:", "wss:"],
+    },
+  },
 }));
 app.use(compression());
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Apply rate limiting to all API routes
+app.use('/api', apiLimiter);
 
 // Serve static files
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -171,27 +205,8 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error('[ERROR]', err.stack);
-  console.error('[ERROR] Request details:', {
-    method: req.method,
-    path: req.path,
-    origin: req.headers.origin,
-    ip: req.ip,
-  });
-  
-  // CORS errors
-  if (err.message && err.message.includes('CORS')) {
-    console.error('[ERROR] CORS Error - Origin:', req.headers.origin);
-    console.error('[ERROR] Allowed origins:', getAllowedOrigins());
-  }
-  
-  res.status(err.status || 500).json({
-    message: err.message || 'Internal Server Error',
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
-  });
-});
+// Error handling middleware (must be last)
+app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
 const HOST = process.env.HOST || '0.0.0.0'; // Listen on all network interfaces

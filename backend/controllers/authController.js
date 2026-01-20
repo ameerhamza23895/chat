@@ -1,5 +1,7 @@
 const User = require('../models/User');
 const jwt = require('jsonwebtoken');
+const cache = require('../utils/cache');
+const logger = require('../utils/logger');
 
 const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, {
@@ -9,21 +11,25 @@ const generateToken = (id) => {
 
 exports.register = async (req, res) => {
   try {
-    console.log('[AUTH] Register attempt - Origin:', req.headers.origin);
-    console.log('[AUTH] Register body:', { username: req.body.username, email: req.body.email });
+    logger.info('Register attempt', { email: req.body.email, username: req.body.username });
     
     const { username, email, password } = req.body;
 
-    if (!username || !email || !password) {
-      console.log('[AUTH] Register failed - Missing fields');
-      return res.status(400).json({ message: 'All fields are required' });
+    // Check cache first
+    const cacheKey = `user:${email}:${username}`;
+    const cached = await cache.get(cacheKey);
+    if (cached) {
+      logger.warn('User already exists (cached)', { email, username });
+      return res.status(400).json({ success: false, message: 'User already exists' });
     }
 
     // Check if user exists
     const userExists = await User.findOne({ $or: [{ email }, { username }] });
     if (userExists) {
-      console.log('[AUTH] Register failed - User already exists:', userExists.email);
-      return res.status(400).json({ message: 'User already exists' });
+      // Cache the result
+      await cache.set(cacheKey, true, 300); // 5 minutes
+      logger.warn('User already exists', { email, username });
+      return res.status(400).json({ success: false, message: 'User already exists' });
     }
 
     // Create user
@@ -33,7 +39,7 @@ exports.register = async (req, res) => {
       password,
     });
 
-    console.log('[AUTH] User created successfully:', user._id);
+    logger.info('User created successfully', { userId: user._id });
 
     const token = generateToken(user._id);
 
@@ -48,35 +54,29 @@ exports.register = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('[AUTH] Register error:', error);
-    res.status(500).json({ message: error.message });
+    logger.error('Register error', { error: error.message, stack: error.stack });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
 exports.login = async (req, res) => {
   try {
-    console.log('[AUTH] Login attempt - Origin:', req.headers.origin);
-    console.log('[AUTH] Login body:', { email: req.body.email });
+    logger.info('Login attempt', { email: req.body.email });
     
     const { email, password } = req.body;
-
-    if (!email || !password) {
-      console.log('[AUTH] Login failed - Missing email or password');
-      return res.status(400).json({ message: 'Email and password are required' });
-    }
 
     // Check if user exists and get password
     const user = await User.findOne({ email }).select('+password');
     if (!user) {
-      console.log('[AUTH] Login failed - User not found:', email);
-      return res.status(401).json({ message: 'Invalid credentials' });
+      logger.warn('Login failed - User not found', { email });
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
     // Check password
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
-      console.log('[AUTH] Login failed - Invalid password for:', email);
-      return res.status(401).json({ message: 'Invalid credentials' });
+      logger.warn('Login failed - Invalid password', { email });
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
     // Update online status
@@ -84,7 +84,10 @@ exports.login = async (req, res) => {
     user.lastSeen = new Date();
     await user.save();
 
-    console.log('[AUTH] Login successful:', user._id);
+    // Clear any cached user data
+    await cache.del(`user:${user._id}`);
+
+    logger.info('Login successful', { userId: user._id });
 
     const token = generateToken(user._id);
 
@@ -100,27 +103,47 @@ exports.login = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error('[AUTH] Login error:', error);
-    res.status(500).json({ message: error.message });
+    logger.error('Login error', { error: error.message, stack: error.stack });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 
 exports.getMe = async (req, res) => {
   try {
+    // Try cache first
+    const cacheKey = `user:${req.user.id}`;
+    const cached = await cache.get(cacheKey);
+    if (cached) {
+      return res.json({
+        success: true,
+        user: cached,
+      });
+    }
+
     const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const userData = {
+      id: user._id,
+      username: user.username,
+      email: user.email,
+      avatar: user.avatar,
+      isOnline: user.isOnline,
+      lastSeen: user.lastSeen,
+    };
+
+    // Cache user data for 5 minutes
+    await cache.set(cacheKey, userData, 300);
+
     res.json({
       success: true,
-      user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        avatar: user.avatar,
-        isOnline: user.isOnline,
-        lastSeen: user.lastSeen,
-      },
+      user: userData,
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    logger.error('Get me error', { error: error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 };
 

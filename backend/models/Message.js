@@ -43,12 +43,36 @@ const messageSchema = new mongoose.Schema({
   readAt: {
     type: Date,
   },
+  isDisappearing: {
+    type: Boolean,
+    default: false,
+  },
+  disappearAfterRead: {
+    type: Boolean,
+    default: false, // If true, delete after being read. If false, delete after time
+  },
+  disappearAt: {
+    type: Date, // When to delete if disappearAfterRead is false
+  },
+  deletedAt: {
+    type: Date, // When message was actually deleted
+  },
+  isDeleted: {
+    type: Boolean,
+    default: false,
+  },
 }, {
   timestamps: true,
 });
 
-// Index for efficient querying
+// Indexes for efficient querying
 messageSchema.index({ sender: 1, receiver: 1, createdAt: -1 });
 messageSchema.index({ receiver: 1, isRead: 1 });
+messageSchema.index({ sender: 1, createdAt: -1 });
+messageSchema.index({ receiver: 1, createdAt: -1 });
+messageSchema.index({ createdAt: -1 });
+messageSchema.index({ messageType: 1 });
+messageSchema.index({ isDisappearing: 1, disappearAt: 1 });
+messageSchema.index({ isDeleted: 1 });
 
 module.exports = mongoose.model('Message', messageSchema);

@@ -23,7 +23,9 @@ const chatSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-// Ensure unique chat between two users
+// Indexes for performance
 chatSchema.index({ participants: 1 }, { unique: true });
+chatSchema.index({ lastMessageAt: -1 });
+chatSchema.index({ 'participants': 1, 'lastMessageAt': -1 });
 
 module.exports = mongoose.model('Chat', chatSchema);

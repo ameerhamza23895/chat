@@ -10,33 +10,26 @@ const getApiUrl = () => {
     return envUrl;
   }
   
-  // Use relative URL to go through Vite proxy (works with HTTPS)
-  // This avoids mixed content issues (HTTPS frontend -> HTTP backend)
-  const useProxy = true;
-  
-  if (useProxy) {
-    // Use relative path - Vite proxy will handle it
-    const apiUrl = '/api';
-    console.log('[API] Using relative URL (via Vite proxy):', apiUrl);
-    return apiUrl;
-  }
-  
   // Auto-detect if accessing from network (not localhost)
   const hostname = window.location.hostname;
+  const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
   
-  if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
-    // We're accessing from network, use the same hostname
-    const protocol = window.location.protocol;
-    const port = window.location.port || (protocol === 'https:' ? '443' : '80');
-    const apiUrl = `${protocol}//${hostname}:5000/api`;
-    console.log('[API] Network access detected, using:', apiUrl);
+  if (isLocalhost) {
+    // Try to use relative URL first (goes through Vite proxy)
+    // This avoids mixed content issues (HTTPS frontend -> HTTP backend)
+    // If proxy fails, we can fall back to direct connection
+    const apiUrl = '/api';
+    console.log('[API] Localhost detected - Using relative URL (via Vite proxy):', apiUrl);
+    console.log('[API] If this fails, backend might not be running or proxy misconfigured');
     return apiUrl;
   }
   
-  // Default to localhost
-  const defaultUrl = 'http://localhost:5000/api';
-  console.log('[API] Using default localhost URL:', defaultUrl);
-  return defaultUrl;
+  // We're accessing from network (IP address), connect directly to backend
+  // Use HTTP (not HTTPS) because backend runs on HTTP
+  // Extract IP from current hostname
+  const backendUrl = `http://${hostname}:5000/api`;
+  console.log('[API] Network access detected (IP:', hostname, ') - Connecting directly to backend:', backendUrl);
+  return backendUrl;
 };
 
 const API_URL = getApiUrl();
@@ -98,6 +91,14 @@ api.interceptors.response.use(
       console.error('  API URL:', API_URL);
       console.error('  Current origin:', window.location.origin);
       console.error('  Make sure backend CORS is configured to allow:', window.location.origin);
+      
+      // If using proxy and it fails, suggest checking backend
+      if (API_URL === '/api') {
+        console.error('[API] Proxy connection failed. Check:');
+        console.error('  1. Backend server is running on http://localhost:5000');
+        console.error('  2. Vite dev server proxy is configured correctly');
+        console.error('  3. Try accessing http://localhost:5000/api/health directly');
+      }
     }
     
     return Promise.reject(error);

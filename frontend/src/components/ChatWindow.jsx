@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { format } from 'date-fns';
-import { FiSend, FiPaperclip, FiSmile, FiX, FiArrowLeft, FiFile, FiFileText, FiImage, FiVideo, FiMusic, FiDownload, FiPhone, FiVideoOff, FiPhoneOff } from 'react-icons/fi';
+import { FiSend, FiPaperclip, FiSmile, FiX, FiArrowLeft, FiFile, FiFileText, FiImage, FiVideo, FiMusic, FiDownload, FiPhone, FiVideoOff, FiPhoneOff, FiClock, FiEye } from 'react-icons/fi';
 import CallWindow from './CallWindow';
 import { useAuth } from '../context/AuthContext';
 import { getSocket } from '../utils/socket';
@@ -19,28 +19,21 @@ const getBaseUrl = () => {
     return envUrl.replace('/api', '');
   }
   
-  // Use relative URL to go through Vite proxy (works with HTTPS)
-  // For file URLs, we need the full URL, so use current origin
-  const useProxy = true;
+  // Auto-detect if accessing from network (not localhost)
+  const hostname = window.location.hostname;
+  const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
   
-  if (useProxy) {
+  if (isLocalhost) {
     // Use current origin - Vite proxy will handle /api routes
     const baseUrl = window.location.origin;
-    console.log('[ChatWindow] Using current origin (via Vite proxy):', baseUrl);
+    console.log('[ChatWindow] Localhost detected - Using current origin (via Vite proxy):', baseUrl);
     return baseUrl;
   }
   
-  // Auto-detect if accessing from network (not localhost)
-  const hostname = window.location.hostname;
-  
-  if (hostname === 'localhost' || hostname === '127.0.0.1') {
-    return 'http://localhost:5000';
-  }
-  
-  // We're accessing from network, use the same hostname with port 5000
-  const protocol = window.location.protocol;
-  const baseUrl = `${protocol}//${hostname}:5000`;
-  console.log('[ChatWindow] Network access detected, using BASE_URL:', baseUrl);
+  // We're accessing from network (IP address), connect directly to backend
+  // Use HTTP (not HTTPS) because backend runs on HTTP
+  const baseUrl = `http://${hostname}:5000`;
+  console.log('[ChatWindow] Network access detected (IP:', hostname, ') - Connecting directly to backend:', baseUrl);
   return baseUrl;
 };
 
@@ -61,6 +54,7 @@ const ChatWindow = ({ selectedUser, onBack }) => {
   const [screenSize, setScreenSize] = useState({ width: window.innerWidth, height: window.innerHeight });
   const [callState, setCallState] = useState(null); // { type: 'video'|'audio', isIncoming: boolean, caller: user, receiver: user }
   const [userOnlineStatus, setUserOnlineStatus] = useState(null); // Track online status separately
+  const [isDisappearingMessage, setIsDisappearingMessage] = useState(false); // Disappearing message toggle
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -206,7 +200,13 @@ const ChatWindow = ({ selectedUser, onBack }) => {
           return prev;
         }
         console.log('[ChatWindow] Adding received message to state');
-        return [...prev, message];
+        // Add message and sort by createdAt to maintain chronological order
+        const newMessages = [...prev, message];
+        return newMessages.sort((a, b) => {
+          const dateA = new Date(a.createdAt || a.timestamp || 0);
+          const dateB = new Date(b.createdAt || b.timestamp || 0);
+          return dateA - dateB; // Sort ascending (oldest first)
+        });
       });
     } else {
       console.log('[ChatWindow] ⚠️ Message not for current conversation - sender:', senderId, 'receiver:', receiverId, 'selected:', selectedUserId, 'current:', currentUserId);
@@ -232,7 +232,12 @@ const ChatWindow = ({ selectedUser, onBack }) => {
           console.log('[ChatWindow] Replacing optimistic message with confirmed message');
           const newMessages = [...prev];
           newMessages[optimisticIndex] = message;
-          return newMessages;
+          // Sort to maintain chronological order after replacement
+          return newMessages.sort((a, b) => {
+            const dateA = new Date(a.createdAt || a.timestamp || 0);
+            const dateB = new Date(b.createdAt || b.timestamp || 0);
+            return dateA - dateB; // Sort ascending (oldest first)
+          });
         }
         
         // Check if message already exists to avoid duplicates
@@ -242,7 +247,13 @@ const ChatWindow = ({ selectedUser, onBack }) => {
           return prev;
         }
         console.log('[ChatWindow] Adding message to state');
-        return [...prev, message];
+        // Add message and sort by createdAt to maintain chronological order
+        const newMessages = [...prev, message];
+        return newMessages.sort((a, b) => {
+          const dateA = new Date(a.createdAt || a.timestamp || 0);
+          const dateB = new Date(b.createdAt || b.timestamp || 0);
+          return dateA - dateB; // Sort ascending (oldest first)
+        });
       });
     }
   }, [user, selectedUser]);
@@ -269,6 +280,26 @@ const ChatWindow = ({ selectedUser, onBack }) => {
         msg._id === data.messageId ? { ...msg, isRead: true, readAt: data.readAt } : msg
       )
     );
+  }, []);
+
+  const handleMessageDeleted = useCallback((data) => {
+    console.log('[ChatWindow] 📨 Message deleted event received:', data);
+    setMessages((prev) => {
+      const beforeCount = prev.length;
+      const filtered = prev.filter(msg => {
+        // Compare both string and ObjectId formats
+        const msgId = msg._id?.toString() || msg._id;
+        const deletedId = data.messageId?.toString() || data.messageId;
+        const shouldKeep = msgId !== deletedId;
+        if (!shouldKeep) {
+          console.log('[ChatWindow] ✅ Removing deleted message:', msgId);
+        }
+        return shouldKeep;
+      });
+      const afterCount = filtered.length;
+      console.log('[ChatWindow] Messages before:', beforeCount, 'after:', afterCount, 'removed:', beforeCount - afterCount);
+      return filtered;
+    });
   }, []);
 
   // Register call handlers globally (not dependent on selectedUser)
@@ -363,6 +394,7 @@ const ChatWindow = ({ selectedUser, onBack }) => {
     socket.on('user-typing', handleTyping);
     socket.on('message-read', handleMessageRead);
     socket.on('message-error', handleMessageError);
+    socket.on('message-deleted', handleMessageDeleted);
 
     return () => {
       if (socket) {
@@ -372,6 +404,7 @@ const ChatWindow = ({ selectedUser, onBack }) => {
         socket.off('user-typing', handleTyping);
         socket.off('message-read', handleMessageRead);
         socket.off('message-error', handleMessageError);
+        socket.off('message-deleted', handleMessageDeleted);
       }
     };
   }, [socket, handleReceiveMessage]);
@@ -454,18 +487,49 @@ const ChatWindow = ({ selectedUser, onBack }) => {
   }, [messages]);
 
   const fetchMessages = async (beforeDate = null) => {
+    if (!selectedUser) {
+      console.warn('[ChatWindow] No selected user, cannot fetch messages');
+      return [];
+    }
+    
     try {
+      const userId = selectedUser._id || selectedUser.id;
+      console.log('[ChatWindow] Fetching messages for user:', userId);
+      console.log('[ChatWindow] Selected user object:', selectedUser);
+      
       const params = beforeDate ? { beforeDate: beforeDate.toISOString() } : {};
-      const response = await api.get(`/messages/${selectedUser._id}`, { params });
+      const response = await api.get(`/messages/${userId}`, { params });
+      
+      console.log('[ChatWindow] Messages response:', response.data);
+      console.log('[ChatWindow] Response success:', response.data.success);
+      console.log('[ChatWindow] Messages array:', response.data.messages);
+      
       const newMessages = response.data.messages || [];
+      console.log('[ChatWindow] Received messages:', newMessages.length);
+      
+      if (newMessages.length === 0) {
+        console.warn('[ChatWindow] No messages received! Check backend logs.');
+      }
       
       if (beforeDate) {
         // Loading older messages - prepend to existing messages
-        setMessages((prev) => [...newMessages, ...prev]);
+        const combined = [...newMessages, ...prev];
+        // Sort by createdAt to ensure proper chronological order
+        const sorted = combined.sort((a, b) => {
+          const dateA = new Date(a.createdAt || a.timestamp || 0);
+          const dateB = new Date(b.createdAt || b.timestamp || 0);
+          return dateA - dateB; // Sort ascending (oldest first)
+        });
+        setMessages(sorted);
         setHasMoreMessages(response.data.hasMore || false);
       } else {
-        // Initial load - replace all messages
-        setMessages(newMessages);
+        // Initial load - replace all messages and ensure they're sorted
+        const sorted = newMessages.sort((a, b) => {
+          const dateA = new Date(a.createdAt || a.timestamp || 0);
+          const dateB = new Date(b.createdAt || b.timestamp || 0);
+          return dateA - dateB; // Sort ascending (oldest first)
+        });
+        setMessages(sorted);
         setHasMoreMessages(response.data.hasMore !== false);
         // Scroll to bottom after initial load
         setTimeout(() => {
@@ -475,7 +539,23 @@ const ChatWindow = ({ selectedUser, onBack }) => {
       
       return newMessages;
     } catch (error) {
-      console.error('Error fetching messages:', error);
+      console.error('[ChatWindow] ❌ Error fetching messages:', error);
+      console.error('[ChatWindow] Error details:', {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        url: error.config?.url,
+      });
+      
+      // Show user-friendly error
+      if (error.response?.status === 404) {
+        console.warn('[ChatWindow] User not found or no messages');
+      } else if (error.response?.status === 401) {
+        console.error('[ChatWindow] Unauthorized - token may be invalid');
+      } else {
+        console.error('[ChatWindow] Server error:', error.response?.data);
+      }
+      
       return [];
     }
   };
@@ -628,6 +708,8 @@ const ChatWindow = ({ selectedUser, onBack }) => {
       receiverId: selectedUser._id,
       content: newMessage.trim(),
       messageType: 'text',
+      isDisappearing: isDisappearingMessage,
+      disappearAfterRead: isDisappearingMessage, // Delete after read (like WhatsApp)
     };
 
     if (socket) {
@@ -715,6 +797,8 @@ const ChatWindow = ({ selectedUser, onBack }) => {
         fileName: fileData.fileName,
         fileSize: fileData.fileSize,
         mimeType: fileData.mimeType,
+        isDisappearing: isDisappearingMessage,
+        disappearAfterRead: isDisappearingMessage,
       };
 
       // Create optimistic message immediately (like WhatsApp)
@@ -1058,11 +1142,32 @@ const ChatWindow = ({ selectedUser, onBack }) => {
             </div>
           </div>
         )}
+
+        {/* Debug: Show message count */}
+        {process.env.NODE_ENV === 'development' && (
+          <div className="text-xs text-slate-500 px-2">
+            Debug: {messages.length} messages loaded
+          </div>
+        )}
+
+        {/* Empty state */}
+        {messages.length === 0 && !loadingOlderMessages && selectedUser && (
+          <div className="flex flex-col items-center justify-center h-full text-center p-4">
+            <p className="text-slate-400 mb-2">No messages yet</p>
+            <p className="text-xs text-slate-500">Start a conversation by sending a message</p>
+          </div>
+        )}
         
         {messages.map((message) => {
-          const isOwn = message.sender._id === user.id;
+          if (!message || !message.sender) {
+            console.warn('[ChatWindow] Invalid message:', message);
+            return null;
+          }
+          
+          const isOwn = (message.sender._id || message.sender.id) === (user.id || user._id);
           const isMedia = ['image', 'video', 'audio', 'file'].includes(message.messageType);
           const isCallHistory = ['call-video-ended', 'call-audio-ended', 'call-missed'].includes(message.messageType);
+          const isDisappearing = message.isDisappearing || false;
           
           // Call history messages are centered
           if (isCallHistory) {
@@ -1103,8 +1208,11 @@ const ChatWindow = ({ selectedUser, onBack }) => {
                 >
                   {renderMessageContent(message)}
                 </div>
-                <span className="text-xs text-slate-500 mt-1 px-2">
+                <span className="text-xs text-slate-500 mt-1 px-2 flex items-center gap-1">
                   {format(new Date(message.createdAt), 'HH:mm')}
+                  {isDisappearing && (
+                    <FiClock className="text-slate-400" size={12} title="Disappearing message" />
+                  )}
                   {isOwn && message.isRead && !message.isOptimistic && ' ✓✓'}
                 </span>
               </div>
@@ -1316,6 +1424,18 @@ const ChatWindow = ({ selectedUser, onBack }) => {
             <FiPaperclip size={18} className="md:w-5 md:h-5" />
           </button>
           
+          <button
+            onClick={() => setIsDisappearingMessage(!isDisappearingMessage)}
+            className={`p-1.5 md:p-2 transition-colors flex-shrink-0 ${
+              isDisappearingMessage 
+                ? 'text-primary-400 hover:text-primary-300' 
+                : 'text-slate-400 hover:text-white'
+            }`}
+            title={isDisappearingMessage ? "Disappearing message enabled - Click to disable" : "Send disappearing message (like WhatsApp)"}
+          >
+            <FiEye size={18} className="md:w-5 md:h-5" />
+          </button>
+          
           <div className="flex-1 relative min-w-0">
             <textarea
               ref={(el) => {
@@ -1351,9 +1471,13 @@ const ChatWindow = ({ selectedUser, onBack }) => {
                   e.target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
                 }, 300);
               }}
-              placeholder="Type a message..."
+              placeholder={isDisappearingMessage ? "Type a disappearing message..." : "Type a message..."}
               rows={1}
-              className="w-full px-3 md:px-4 py-1.5 md:py-2 text-sm md:text-base bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-primary-500 resize-none max-h-24 md:max-h-32"
+              className={`w-full px-3 md:px-4 py-1.5 md:py-2 text-sm md:text-base bg-slate-700 border rounded-lg text-white placeholder-slate-400 focus:outline-none focus:ring-2 resize-none max-h-24 md:max-h-32 ${
+                isDisappearingMessage 
+                  ? 'border-primary-500 focus:ring-primary-500' 
+                  : 'border-slate-600 focus:ring-primary-500'
+              }`}
             />
           </div>
           

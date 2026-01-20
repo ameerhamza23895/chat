@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { FiMail, FiLock, FiUser } from 'react-icons/fi';
 
-const Register = () => {
+const Register = React.memo(() => {
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -12,7 +12,7 @@ const Register = () => {
   const { register } = useAuth();
   const navigate = useNavigate();
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = useCallback(async (e) => {
     e.preventDefault();
     setError('');
     setLoading(true);
@@ -36,7 +36,7 @@ const Register = () => {
       setLoading(false);
       setError(error.response?.data?.message || error.message || 'Failed to connect to server. Check your network connection.');
     }
-  };
+  }, [username, email, password, register, navigate]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 px-4 py-8">
@@ -125,6 +125,8 @@ const Register = () => {
       </div>
     </div>
   );
-};
+});
+
+Register.displayName = 'Register';
 
 export default Register;

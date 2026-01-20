@@ -2,9 +2,11 @@ const express = require('express');
 const router = express.Router();
 const upload = require('../middleware/upload');
 const { protect } = require('../middleware/auth');
+const { uploadLimiter } = require('../middleware/rateLimiter');
+const logger = require('../utils/logger');
 const path = require('path');
 
-router.post('/file', protect, upload.single('file'), (req, res) => {
+router.post('/file', protect, uploadLimiter, upload.single('file'), (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'No file uploaded' });
@@ -27,7 +29,8 @@ router.post('/file', protect, upload.single('file'), (req, res) => {
       },
     });
   } catch (error) {
-    res.status(500).json({ message: error.message });
+    logger.error('File upload error', { error: error.message });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 

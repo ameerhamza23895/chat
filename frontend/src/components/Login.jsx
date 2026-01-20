@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { FiMail, FiLock, FiUser } from 'react-icons/fi';
 
-const Login = () => {
+const Login = React.memo(() => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -11,7 +11,7 @@ const Login = () => {
   const { login } = useAuth();
   const navigate = useNavigate();
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = useCallback(async (e) => {
     e.preventDefault();
     setError('');
     setLoading(true);
@@ -35,7 +35,7 @@ const Login = () => {
       setLoading(false);
       setError(error.response?.data?.message || error.message || 'Failed to connect to server. Check your network connection.');
     }
-  };
+  }, [email, password, login, navigate]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 px-4 py-8">
@@ -104,6 +104,8 @@ const Login = () => {
       </div>
     </div>
   );
-};
+});
+
+Login.displayName = 'Login';
 
 export default Login;

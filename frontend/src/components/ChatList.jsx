@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { formatDistanceToNow } from 'date-fns';
 import api from '../utils/api';
 import { FiSearch, FiMessageCircle } from 'react-icons/fi';
@@ -116,12 +116,21 @@ const ChatList = ({ onSelectChat, selectedChatId }) => {
     }
   };
 
-  const getOtherParticipant = (chat) => {
-    const currentUserId = JSON.parse(localStorage.getItem('user')).id;
-    return chat.participants.find((p) => p._id !== currentUserId) || chat.participants[0];
-  };
+  const currentUserId = useMemo(() => {
+    try {
+      const user = JSON.parse(localStorage.getItem('user'));
+      return user?.id || user?._id;
+    } catch {
+      return null;
+    }
+  }, []);
 
-  const getLastMessagePreview = (chat) => {
+  const getOtherParticipant = useCallback((chat) => {
+    if (!currentUserId) return chat.participants[0];
+    return chat.participants.find((p) => (p._id || p.id) !== currentUserId) || chat.participants[0];
+  }, [currentUserId]);
+
+  const getLastMessagePreview = useCallback((chat) => {
     const message = chat.lastMessage;
     if (!message) return 'No messages yet';
 
@@ -143,21 +152,28 @@ const ChatList = ({ onSelectChat, selectedChatId }) => {
       default:
         return 'Sent a message';
     }
-};
+  }, []);
 
-
-  const filteredChats = chats.filter((chat) => {
-    const otherUser = getOtherParticipant(chat);
-    return otherUser.username.toLowerCase().includes(searchTerm.toLowerCase());
-  });
-
-  const filteredUsers = users.filter((user) => {
-    const existingChat = chats.find((chat) => {
+  const filteredChats = useMemo(() => {
+    if (!searchTerm) return chats;
+    const lowerSearch = searchTerm.toLowerCase();
+    return chats.filter((chat) => {
       const otherUser = getOtherParticipant(chat);
-      return otherUser._id === user._id;
+      return otherUser?.username?.toLowerCase().includes(lowerSearch);
     });
-    return !existingChat && user.username.toLowerCase().includes(searchTerm.toLowerCase());
-  });
+  }, [chats, searchTerm, getOtherParticipant]);
+
+  const filteredUsers = useMemo(() => {
+    if (!searchTerm) return [];
+    const lowerSearch = searchTerm.toLowerCase();
+    return users.filter((user) => {
+      const existingChat = chats.find((chat) => {
+        const otherUser = getOtherParticipant(chat);
+        return (otherUser._id || otherUser.id) === (user._id || user.id);
+      });
+      return !existingChat && user.username?.toLowerCase().includes(lowerSearch);
+    });
+  }, [users, chats, searchTerm, getOtherParticipant]);
 
   if (loading) {
     return (

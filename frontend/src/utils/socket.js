@@ -10,32 +10,23 @@ const getSocketUrl = () => {
     return envUrl;
   }
   
-  // Use relative URL to go through Vite proxy (works with HTTPS)
-  // This avoids mixed content issues (HTTPS frontend -> HTTP backend)
-  const useProxy = true;
-  
-  if (useProxy) {
-    // Use relative path - Vite proxy will handle it
-    const socketUrl = '';
-    console.log('[Socket] Using relative URL (via Vite proxy):', socketUrl || 'current origin');
-    return socketUrl;
-  }
-  
   // Auto-detect if accessing from network (not localhost)
   const hostname = window.location.hostname;
+  const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1';
   
-  if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
-    // We're accessing from network, use the same hostname and protocol
-    const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
-    const socketUrl = `${protocol}//${hostname}:5000`;
-    console.log('[Socket] Network access detected, using:', socketUrl);
+  if (isLocalhost) {
+    // Use relative URL to go through Vite proxy (works with HTTPS)
+    // This avoids mixed content issues (HTTPS frontend -> HTTP backend)
+    const socketUrl = '';
+    console.log('[Socket] Localhost detected - Using relative URL (via Vite proxy):', socketUrl || 'current origin');
     return socketUrl;
   }
   
-  // Default to localhost
-  const defaultUrl = 'http://localhost:5000';
-  console.log('[Socket] Using default localhost URL:', defaultUrl);
-  return defaultUrl;
+  // We're accessing from network (IP address), connect directly to backend
+  // Use HTTP (not HTTPS) because backend runs on HTTP
+  const socketUrl = `http://${hostname}:5000`;
+  console.log('[Socket] Network access detected (IP:', hostname, ') - Connecting directly to backend:', socketUrl);
+  return socketUrl;
 };
 
 const SOCKET_URL = getSocketUrl();
@@ -69,8 +60,9 @@ export const initSocket = (token) => {
     socketUrl = window.location.origin;
     socketOptions.path = '/socket.io';
   } else {
+    // Direct connection to backend (network access)
     socketUrl = SOCKET_URL;
-    socketOptions.path = undefined; // Use default path
+    socketOptions.path = '/socket.io'; // Backend uses /socket.io path
   }
 
   console.log('[Socket] Initializing connection to:', socketUrl);
